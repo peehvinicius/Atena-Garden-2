@@ -1,0 +1,29 @@
+{
+  "short_name": "Atena",
+  "name": "Atena Garden",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "./icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "start_url": "./",
+  "background_color": "#f8fafc",
+  "display": "standalone",
+  "scope": "./",
+  "theme_color": "#10b981",
+  "description": "Gestão botânica local com IA, clima, estoque, sementes e backup por importação/exportação.",
+  "orientation": "portrait"
+}

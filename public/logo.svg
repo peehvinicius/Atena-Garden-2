@@ -1,0 +1,13 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="128" fill="#2D5A27"/>
+  <!-- Stylized Athena Busto -->
+  <path d="M256 120C210 120 180 160 180 210C180 260 210 300 256 300C302 300 332 260 332 210C332 160 302 120 256 120Z" fill="#A8E063" opacity="0.9"/>
+  <path d="M256 300V380M200 380H312M256 100L220 140M256 100L292 140" stroke="#A8E063" stroke-width="12" stroke-linecap="round"/>
+  <!-- Olive Leaves/Wreath -->
+  <path d="M160 210C140 180 120 220 140 250C160 280 180 240 160 210Z" fill="#A8E063"/>
+  <path d="M352 210C372 180 392 220 372 250C352 280 332 240 352 210Z" fill="#A8E063"/>
+  <path d="M180 140C160 110 140 150 160 180C180 210 200 170 180 140Z" fill="#A8E063"/>
+  <path d="M332 140C352 110 372 150 352 180C332 210 312 170 332 140Z" fill="#A8E063"/>
+  <!-- Helmet Detail -->
+  <path d="M220 160C220 140 292 140 292 160" stroke="#2D5A27" stroke-width="4"/>
+</svg>

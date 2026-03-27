@@ -1,0 +1,5 @@
+{
+  "name": "Atena Garden",
+  "description": "Gestão inteligente e visual do seu jardim. Monitore plantas, clima e tarefas com uma interface moderna e profissional.",
+  "requestFramePermissions": ["camera", "geolocation"]
+}
