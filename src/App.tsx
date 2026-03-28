@@ -60,6 +60,12 @@ interface Plant {
   id: string;
   name: string;
   species?: string;
+  category?: string;
+  subCategory?: string;
+  growthType?: string;
+  preferredLight?: string;
+  indoorOutdoor?: string;
+  toxicInfo?: string;
   locationId: string;
   status: 'Saudável' | 'Recuperação' | 'Problema' | 'Muda';
   wateringFrequency: string;
@@ -252,6 +258,38 @@ const DRAINAGE_OPTIONS = [UNKNOWN_OPTION, 'Sem drenagem extra', 'Argila expandid
 const FILTER_OPTIONS = [UNKNOWN_OPTION, 'Sem manta', 'Manta bidim', 'Tela plástica', 'Filtro de café'];
 const STOCK_USAGE_TAGS = ['Substrato', 'Drenagem', 'Filtragem', 'Vaso', 'Ferramenta', 'Adubação', 'Germinação', 'Sementes & Mudas', 'Defensivo', 'Irrigação', 'Suporte', 'Outro'];
 
+type PlantKnowledgeEntry = {
+  canonicalName: string;
+  aliases: string[];
+  scientificName: string;
+  category: string;
+  subCategory: string;
+  growthType: string;
+  preferredLight: string;
+  indoorOutdoor: string;
+  toxicInfo: string;
+  wateringFrequency: string;
+  substrate: string;
+  substrateMix: string;
+  drainage: string;
+  filterMaterial: string;
+  potSize: string;
+  notes: string;
+};
+
+const PLANT_KNOWLEDGE_BASE: PlantKnowledgeEntry[] = [
+  { canonicalName: 'Babosa', aliases: ['babosa', 'aloe vera'], scientificName: 'Aloe vera', category: 'Suculenta', subCategory: 'Medicinal', growthType: 'Roseta', preferredLight: 'Sol Parcial / Sol Pleno', indoorOutdoor: 'Vaso / Exterior protegido', toxicInfo: 'Atenção com pets sensíveis', wateringFrequency: 'Quinzenal', substrate: 'Substrato para suculentas', substrateMix: 'Substrato para suculentas + areia', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Prefere secar entre regas. Evite encharcamento.' },
+  { canonicalName: 'Jiboia', aliases: ['jiboia', 'jibóia', 'pothos', 'epipremnum aureum'], scientificName: 'Epipremnum aureum', category: 'Folhagem tropical', subCategory: 'Trepadeira', growthType: 'Pendente / Trepadeira', preferredLight: 'Meia Sombra / Luz Indireta', indoorOutdoor: 'Interior iluminado / Vaso', toxicInfo: 'Tóxica para pets se ingerida', wateringFrequency: 'Semanal', substrate: 'Substrato para folhagens', substrateMix: 'Terra + húmus + material drenante', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Boa para ambientes internos luminosos, sem sol forte direto.' },
+  { canonicalName: 'Zamioculca', aliases: ['zamioculca', 'zamioculcas'], scientificName: 'Zamioculcas zamiifolia', category: 'Folhagem resistente', subCategory: 'Interior', growthType: 'Touceira', preferredLight: 'Luz Indireta / Meia Sombra', indoorOutdoor: 'Interior / Vaso', toxicInfo: 'Tóxica para pets se ingerida', wateringFrequency: 'Quinzenal', substrate: 'Substrato para folhagens', substrateMix: 'Terra + material drenante', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Tolera pouca água melhor que excesso.' },
+  { canonicalName: 'Espada-de-São-Jorge', aliases: ['espada-de-são-jorge', 'espada de são jorge', 'espada de sao jorge', 'lingua de sogra', 'língua de sogra', 'sansevieria'], scientificName: 'Dracaena trifasciata', category: 'Folhagem estrutural', subCategory: 'Rizomatosa', growthType: 'Touceira vertical', preferredLight: 'Luz Indireta / Sol Parcial', indoorOutdoor: 'Interior / Exterior protegido', toxicInfo: 'Tóxica para pets se ingerida', wateringFrequency: 'Quinzenal', substrate: 'Substrato para suculentas', substrateMix: 'Substrato drenante + areia', drainage: 'Brita', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Muito resistente. Evite excesso de água.' },
+  { canonicalName: 'Lírio-da-Paz', aliases: ['lirio da paz', 'lírio da paz', 'spathiphyllum'], scientificName: 'Spathiphyllum wallisii', category: 'Folhagem floral', subCategory: 'Interior', growthType: 'Touceira', preferredLight: 'Meia Sombra / Luz Indireta', indoorOutdoor: 'Interior iluminado', toxicInfo: 'Tóxica para pets se ingerida', wateringFrequency: 'Semanal', substrate: 'Substrato para folhagens', substrateMix: 'Terra + húmus', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Gosta de umidade equilibrada e sem sol direto forte.' },
+  { canonicalName: 'Filodendro Brasil', aliases: ['filodendro brasil', 'philodendron brasil', 'philodendro brasil', 'filodendro-brasil'], scientificName: 'Philodendron hederaceum var. hederaceum', category: 'Folhagem tropical', subCategory: 'Trepadeira', growthType: 'Pendente / Trepadeira', preferredLight: 'Meia Sombra / Luz Indireta', indoorOutdoor: 'Interior iluminado / Vaso', toxicInfo: 'Tóxica para pets se ingerida', wateringFrequency: 'Semanal', substrate: 'Substrato para folhagens', substrateMix: 'Terra + húmus + casca de pinus', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Prefere boa drenagem e luz sem sol forte direto.' },
+  { canonicalName: 'Manjericão', aliases: ['manjericão', 'manjericao', 'basil', 'ocimum basilicum'], scientificName: 'Ocimum basilicum', category: 'Erva culinária', subCategory: 'Aromática', growthType: 'Herbácea', preferredLight: 'Sol Parcial / Sol Pleno', indoorOutdoor: 'Exterior / Vaso ensolarado', toxicInfo: 'Não tóxica', wateringFrequency: 'Diária', substrate: 'Terra vegetal', substrateMix: 'Terra + húmus', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Médio', notes: 'Vai melhor com várias horas de luz e regas regulares sem encharcar.' },
+  { canonicalName: 'Samambaia', aliases: ['samambaia', 'nephrolepis'], scientificName: 'Nephrolepis exaltata', category: 'Folhagem clássica', subCategory: 'Pendente', growthType: 'Touceira pendente', preferredLight: 'Meia Sombra / Luz Indireta', indoorOutdoor: 'Interior iluminado / Varanda coberta', toxicInfo: 'Baixa toxicidade', wateringFrequency: 'Semanal', substrate: 'Substrato para folhagens', substrateMix: 'Terra + húmus + material leve', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Jardineira', notes: 'Gosta de umidade ambiente e proteção de sol direto forte.' },
+  { canonicalName: 'Flor-da-Fortuna', aliases: ['flor da fortuna', 'flor-da-fortuna', 'kalanchoe', 'kalanchoe blossfeldiana'], scientificName: 'Kalanchoe blossfeldiana', category: 'Suculenta florífera', subCategory: 'Ornamental', growthType: 'Compacta', preferredLight: 'Sol Parcial / Meia Sombra', indoorOutdoor: 'Vaso / Exterior protegido', toxicInfo: 'Tóxica para pets se ingerida', wateringFrequency: 'Quinzenal', substrate: 'Substrato para suculentas', substrateMix: 'Substrato drenante + areia', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Pequeno', notes: 'Florífera compacta que prefere luz forte e boa drenagem.' },
+  { canonicalName: 'Suculenta', aliases: ['suculenta', 'suculentas'], scientificName: '-', category: 'Suculenta', subCategory: 'Genérica', growthType: 'Variável', preferredLight: 'Sol Parcial / Sol Pleno', indoorOutdoor: 'Vaso / Exterior protegido', toxicInfo: '-', wateringFrequency: 'Quinzenal', substrate: 'Substrato para suculentas', substrateMix: 'Substrato drenante + areia', drainage: 'Argila expandida', filterMaterial: 'Manta bidim', potSize: 'Pequeno', notes: 'Use como preenchimento rápido quando a planta for apenas uma suculenta genérica.' }
+];
+
 const makeId = () => Math.random().toString(36).slice(2, 9);
 
 const createPhotoEntry = (image: string, note = 'Registro fotográfico', source = 'Manual', date = new Date().toISOString()): PlantPhotoEntry => ({
@@ -292,6 +330,12 @@ const normalizePlantRecord = (plant: Partial<Plant>): Plant => {
     id: plant.id || makeId(),
     name: plant.name || 'Planta sem nome',
     species: normalizeChoice(plant.species),
+    category: normalizeChoice((plant as any).category),
+    subCategory: normalizeChoice((plant as any).subCategory),
+    growthType: normalizeChoice((plant as any).growthType),
+    preferredLight: normalizeChoice((plant as any).preferredLight),
+    indoorOutdoor: normalizeChoice((plant as any).indoorOutdoor),
+    toxicInfo: normalizeChoice((plant as any).toxicInfo),
     locationId: plant.locationId || '1',
     status: (plant.status as Plant['status']) || 'Saudável',
     wateringFrequency: plant.wateringFrequency || 'Semanal',
@@ -594,8 +638,14 @@ const lightScore = (desired: string[], actual?: string | null) => {
 const describeRank = (score: number): RankedLocationMatch['label'] => score >= 78 ? 'Ideal' : score >= 58 ? 'Boa opção' : 'Atenção';
 
 const buildPlantProfile = (plant: Partial<Plant>) => {
-  const combined = `${plant.name || ''} ${plant.species || ''} ${plant.notes || ''}`.toLowerCase();
+  const combined = `${plant.name || ''} ${plant.species || ''} ${(plant as any).category || ''} ${(plant as any).subCategory || ''} ${(plant as any).preferredLight || ''} ${plant.notes || ''}`.toLowerCase();
   let preferredLights = ['Meia Sombra', 'Luz Indireta'];
+  const explicitLight = normalizeChoice((plant as any).preferredLight);
+  if (/sol pleno/.test(explicitLight)) preferredLights = ['Sol Pleno', 'Sol Parcial'];
+  else if (/sol parcial/.test(explicitLight)) preferredLights = ['Sol Parcial', 'Meia Sombra'];
+  else if (/meia sombra/.test(explicitLight)) preferredLights = ['Meia Sombra', 'Luz Indireta'];
+  else if (/luz indireta/.test(explicitLight)) preferredLights = ['Luz Indireta', 'Meia Sombra'];
+  else if (/sombra/.test(explicitLight)) preferredLights = ['Sombra', 'Luz Indireta'];
   if (/aloe|babosa|cacto|suculent|crassula|echeveria|agave|onze-horas|rosa do deserto/.test(combined)) preferredLights = ['Sol Pleno', 'Sol Parcial'];
   if (/jiboia|philodend|filodendro|samambaia|calathea|maranta|lírio|lirio|spathiphyllum|zamioculca|anturio|costela/.test(combined)) preferredLights = ['Meia Sombra', 'Luz Indireta'];
   if (/manjeric|alecrim|lavanda|tomilho|salsa|hortelã|hortela|basil/.test(combined)) preferredLights = ['Sol Pleno', 'Sol Parcial'];
@@ -980,6 +1030,52 @@ const buildStockRecommendationBundle = (stock: StockItem[], fields: Partial<Plan
 };
 
 const buildSmartStockSuggestion = (stock: StockItem[], fields: Partial<Plant> & { species?: string; notes?: string }) => buildStockRecommendationBundle(stock, fields).summary;
+const normalizeSearchLabel = (value = '') => value.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const scorePlantKnowledgeEntry = (entry: PlantKnowledgeEntry, query: string) => {
+  const clean = normalizeSearchLabel(query);
+  if (!clean) return 0;
+  const aliases = [entry.canonicalName, entry.scientificName, ...entry.aliases].map(normalizeSearchLabel);
+  if (aliases.includes(clean)) return 100;
+  if (aliases.some(alias => alias.startsWith(clean) || clean.startsWith(alias))) return 88;
+  const queryTokens = clean.split(' ').filter(Boolean);
+  if (!queryTokens.length) return 0;
+  return aliases.reduce((best, alias) => {
+    const aliasTokens = alias.split(' ').filter(Boolean);
+    const overlap = queryTokens.filter(token => aliasTokens.some(aliasToken => aliasToken.includes(token) || token.includes(aliasToken))).length;
+    return Math.max(best, overlap * 18 + (alias.includes(clean) ? 22 : 0));
+  }, 0);
+};
+const findPlantKnowledge = (query: string) => {
+  const ranked = PLANT_KNOWLEDGE_BASE.map(entry => ({ entry, score: scorePlantKnowledgeEntry(entry, query) })).sort((a, b) => b.score - a.score);
+  return ranked[0] && ranked[0].score >= 24 ? ranked[0] : null;
+};
+const buildPlantFromKnowledge = (entry: PlantKnowledgeEntry): Partial<Plant> => ({
+  name: entry.canonicalName,
+  species: entry.scientificName,
+  category: entry.category,
+  subCategory: entry.subCategory,
+  growthType: entry.growthType,
+  preferredLight: entry.preferredLight,
+  indoorOutdoor: entry.indoorOutdoor,
+  toxicInfo: entry.toxicInfo,
+  status: 'Saudável',
+  wateringFrequency: entry.wateringFrequency,
+  potSize: entry.potSize,
+  substrate: entry.substrate,
+  substrateMix: entry.substrateMix,
+  drainage: entry.drainage,
+  drainageLayer: entry.drainage,
+  filterMaterial: entry.filterMaterial,
+  notes: entry.notes,
+});
+const getPlantLookupSuggestion = (query: string, stock: StockItem[], locations: Location[]) => {
+  const match = findPlantKnowledge(query);
+  if (!match) return null;
+  const draft = normalizePlantRecord(buildPlantFromKnowledge(match.entry));
+  const environment = getPlantEnvironmentRecommendation(draft, locations);
+  const stockBundle = buildStockRecommendationBundle(stock, draft);
+  return { entry: match.entry, score: match.score, draft: normalizePlantRecord({ ...draft, ...stockBundle.patch }), environment, stockBundle };
+};
 
 
 function StockSuggestionPanel({ summary, items, onApply, disabled, message }: { summary: string; items: StockRecommendationItem[]; onApply: () => void; disabled?: boolean; message?: string | null; }) {
@@ -1783,7 +1879,7 @@ export default function App() {
           <SidebarLink icon={StockIcon} label="Estoque" active={activeTab === 'stock'} onClick={() => setActiveTab('stock')} />
           
           <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ferramentas</div>
-          <SidebarLink icon={Scan} label="Identificar Planta" active={activeTab === 'identify'} onClick={() => setActiveTab('identify')} />
+          <SidebarLink icon={Search} label="Pesquisar Planta" active={activeTab === 'identify'} onClick={() => setActiveTab('identify')} />
           <SidebarLink icon={Bug} label="Diagnóstico IA" active={activeTab === 'diagnose'} onClick={() => setActiveTab('diagnose')} />
           
           <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Histórico</div>
@@ -1812,7 +1908,7 @@ export default function App() {
             onClick={() => setActiveTab('identify')}
             className={`w-18 h-18 rounded-full flex items-center justify-center text-white shadow-[0_8px_30px_rgba(16,185,129,0.4)] border-4 border-white transition-all active:scale-95 ${activeTab === 'identify' ? 'bg-emerald-600 scale-110' : 'bg-emerald-500'}`}
           >
-            <Scan className="w-9 h-9" />
+            <Search className="w-9 h-9" />
           </button>
         </div>
         <div className="flex flex-1 items-end justify-around">
@@ -3715,511 +3811,34 @@ function DiagnoseView({ addToHistory, setToast }: any) {
   );
 }
 
-function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLightToLocation }: any) {
-  const [mode, setMode] = useState<'ai' | 'manual'>('ai');
-  const [image, setImage] = useState<string | null>(null);
-  const [identifying, setIdentifying] = useState(false);
-  const [plantData, setPlantData] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+function IdentifyPlantView({ addPlant, locations, stock, addToHistory }: any) {
+  const [mode, setMode] = useState<'lookup' | 'manual'>('lookup');
+  const [lookupQuery, setLookupQuery] = useState('');
+  const [lookupResult, setLookupResult] = useState<ReturnType<typeof getPlantLookupSuggestion> | null>(null);
+  const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState(locations[0]?.id || '');
   const [confirmed, setConfirmed] = useState(false);
   const [stockMessage, setStockMessage] = useState<string | null>(null);
-  const [lightMeasurement, setLightMeasurement] = useState<LightAnalysisResult | null>(null);
-  const [applyingLight, setApplyingLight] = useState(false);
-  const [manualPlant, setManualPlant] = useState<Partial<Plant>>({
-    name: '',
-    species: UNKNOWN_OPTION,
-    locationId: locations[0]?.id || '',
-    status: 'Saudável',
-    wateringFrequency: 'Semanal',
-    notes: UNKNOWN_OPTION,
-    potSize: UNKNOWN_OPTION,
-    substrate: UNKNOWN_OPTION,
-    drainage: UNKNOWN_OPTION,
-    filterMaterial: UNKNOWN_OPTION,
-    substrateMix: UNKNOWN_OPTION,
-    drainageLayer: UNKNOWN_OPTION,
-    image: ''
-  });
-
-  const matchSelectOption = (value: string | undefined, options: string[]) => {
-    const normalized = normalizeChoice(value);
-    return options.includes(normalized) ? normalized : UNKNOWN_OPTION;
-  };
-
-  const patchPlantData = (partial: any) => {
-    setPlantData((prev: any) => ({ ...(prev || {}), ...partial }));
-  };
-
-  const aiStockBundle = useMemo(() => buildStockRecommendationBundle(stock, plantData || {}), [stock, plantData]);
-  const aiStockSuggestion = useMemo(() => {
-    if (!plantData) return '';
-    return [plantData.stockSuggestions && plantData.stockSuggestions !== UNKNOWN_OPTION ? plantData.stockSuggestions : '', aiStockBundle.summary].filter(Boolean).join(' ');
-  }, [plantData, aiStockBundle]);
-
+  const [manualLookupMessage, setManualLookupMessage] = useState<string | null>(null);
+  const [manualPlant, setManualPlant] = useState<Partial<Plant>>({ name: '', species: UNKNOWN_OPTION, category: UNKNOWN_OPTION, subCategory: UNKNOWN_OPTION, growthType: UNKNOWN_OPTION, preferredLight: UNKNOWN_OPTION, indoorOutdoor: UNKNOWN_OPTION, toxicInfo: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION, image: '' });
+  const patchLookupDraft = (partial: Partial<Plant>) => setLookupResult(prev => prev ? ({ ...prev, draft: normalizePlantRecord({ ...prev.draft, ...partial }) }) : prev);
   const manualStockBundle = useMemo(() => buildStockRecommendationBundle(stock, manualPlant), [stock, manualPlant]);
-  const manualStockSuggestion = manualStockBundle.summary;
-
-  const applyAiStockSuggestion = () => {
-    if (!plantData) return;
-    const patch = aiStockBundle.patch;
-    if (!Object.keys(patch).length) {
-      setStockMessage('A ficha já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.');
-      return;
-    }
-    patchPlantData(patch);
-    setStockMessage('Sugestões do estoque aplicadas ao cadastro por IA.');
-  };
-
-  const applyManualStockSuggestion = () => {
-    const patch = manualStockBundle.patch;
-    if (!Object.keys(patch).length) {
-      setStockMessage('A ficha manual já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.');
-      return;
-    }
-    setManualPlant(prev => ({ ...prev, ...patch }));
-    setStockMessage('Sugestões do estoque aplicadas aos campos técnicos em aberto.');
-  };
-
-  const resetAiState = () => {
-    setImage(null);
-    setPlantData(null);
-    setConfirmed(false);
-    setError(null);
-    setStockMessage(null);
-    setLightMeasurement(null);
-  };
-
-  useEffect(() => {
-    setStockMessage(null);
-  }, [mode]);
-
-  const handleCapture = (e: any) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-        identifyPlant(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleManualImage = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => setManualPlant(prev => ({ ...prev, image: reader.result as string }));
-    reader.readAsDataURL(file);
-  };
-
-  const identifyPlant = async (base64Image: string) => {
-    setIdentifying(true);
-    setError(null);
-    setConfirmed(false);
-    try {
-      const lightAnalysis = await analyzeLightWithAI(base64Image);
-      setLightMeasurement(lightAnalysis);
-      setPlantData(identifyPlantLocally(lightAnalysis, stock));
-      setError('A identificação por foto agora usa IA local básica. Revise manualmente a ficha antes de salvar.');
-    } finally {
-      setIdentifying(false);
-    }
-  };
-
-  const handleApplyDetectedLight = async () => {
-    if (!lightMeasurement) {
-      setStockMessage('Ainda não há leitura de luminosidade para aplicar.');
-      return;
-    }
-    if (!selectedLocation) {
-      setStockMessage('Escolha um ambiente antes de aplicar a medição de luz.');
-      return;
-    }
-    setApplyingLight(true);
-    try {
-      await onApplyLightToLocation?.(selectedLocation, lightMeasurement);
-      setStockMessage(`Leitura de luminosidade aplicada ao ambiente ${locations.find((l: any) => l.id === selectedLocation)?.name || ''}.`);
-    } finally {
-      setApplyingLight(false);
-    }
-  };
-
-  const handleSave = () => {
-    if (!plantData) return;
-
-    const newPlant: Plant = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: normalizeChoice(plantData.name),
-      species: normalizeChoice(plantData.species),
-      locationId: selectedLocation,
-      status: (plantData.status || 'Saudável') as Plant['status'],
-      wateringFrequency: plantData.wateringFrequency || 'Semanal',
-      notes: [normalizeChoice(plantData.notes), aiStockSuggestion].filter(Boolean).join('\n\n'),
-      image: image || undefined,
-      lastWatered: new Date().toISOString(),
-      lastRepotted: '',
-      potSize: normalizeChoice(plantData.potSize),
-      substrateMix: normalizeChoice(plantData.substrateMix),
-      drainageLayer: normalizeChoice(plantData.drainageLayer),
-      substrate: normalizeChoice(plantData.substrate),
-      drainage: normalizeChoice(plantData.drainage),
-      filterMaterial: normalizeChoice(plantData.filterMaterial),
-      isFavorite: false,
-      createdAt: new Date().toISOString(),
-      photoHistory: image ? [createPhotoEntry(image, 'Registro inicial por identificação', 'Identificação')] : []
-    };
-
-    addPlant(normalizePlantRecord(newPlant));
-    addToHistory({
-      type: 'Identificação',
-      title: newPlant.name,
-      details: `Espécie: ${newPlant.species}
-Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}
-Substrato: ${newPlant.substrateMix !== UNKNOWN_OPTION ? newPlant.substrateMix : newPlant.substrate}
-Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer : newPlant.drainage}`,
-      image: image || undefined
-    });
-    setConfirmed(true);
-  };
-
-  const handleManualSave = () => {
-    if (!manualPlant.name?.trim()) {
-      alert('Digite pelo menos o nome da planta.');
-      return;
-    }
-
-    const newPlant: Plant = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: manualPlant.name.trim(),
-      species: normalizeChoice(manualPlant.species),
-      locationId: manualPlant.locationId || locations[0]?.id || '1',
-      status: (manualPlant.status as Plant['status']) || 'Saudável',
-      wateringFrequency: manualPlant.wateringFrequency || 'Semanal',
-      notes: [normalizeChoice(manualPlant.notes), manualStockSuggestion].filter(Boolean).join('\n\n'),
-      image: manualPlant.image,
-      lastWatered: manualPlant.lastWatered || '',
-      lastRepotted: manualPlant.lastRepotted || '',
-      potSize: normalizeChoice(manualPlant.potSize),
-      substrate: normalizeChoice(manualPlant.substrate),
-      drainage: normalizeChoice(manualPlant.drainage),
-      filterMaterial: normalizeChoice(manualPlant.filterMaterial),
-      substrateMix: normalizeChoice(manualPlant.substrateMix),
-      drainageLayer: normalizeChoice(manualPlant.drainageLayer),
-      isFavorite: false,
-      createdAt: new Date().toISOString(),
-      photoHistory: manualPlant.image ? [createPhotoEntry(manualPlant.image, 'Registro inicial manual', 'Cadastro manual')] : []
-    };
-
-    addPlant(normalizePlantRecord(newPlant));
-    addToHistory({
-      type: 'Atualização',
-      title: `Cadastro manual: ${newPlant.name}`,
-      details: `Planta adicionada manualmente em ${locations.find((l: any) => l.id === newPlant.locationId)?.name || 'Local não definido'}`,
-      image: newPlant.image,
-    });
-  };
-
-  return (
-    <motion.div
-      key="identify"
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="max-w-3xl mx-auto space-y-8"
-    >
-      <div className="text-center">
-        <h2 className="text-3xl font-bold text-slate-900 mb-2">Adicionar Planta</h2>
-        <p className="text-slate-500">Use IA por foto ou preencha manualmente o cadastro completo da planta.</p>
-      </div>
-
-      <div className="flex bg-slate-100 p-1 rounded-2xl w-full sm:w-fit mx-auto">
-        <button
-          onClick={() => setMode('ai')}
-          className={`px-5 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'ai' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-        >
-          Identificar por foto
-        </button>
-        <button
-          onClick={() => setMode('manual')}
-          className={`px-5 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-        >
-          Cadastro manual
-        </button>
-      </div>
-
-      {mode === 'ai' ? (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
-          {!image ? (
-            <div className="aspect-video bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center gap-4 text-slate-400">
-              <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center">
-                <Scan className="w-8 h-8" />
-              </div>
-              <label className="cursor-pointer bg-emerald-500 text-white px-8 py-4 rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 flex items-center gap-2">
-                <Camera className="w-5 h-5" /> Identificar Planta
-                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleCapture} />
-              </label>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="aspect-video rounded-2xl overflow-hidden relative border border-slate-200 shadow-inner">
-                <img src={image} alt="Planta capturada" className="w-full h-full object-cover" />
-                {identifying && (
-                  <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex flex-col items-center justify-center text-white gap-3">
-                    <RefreshCw className="w-8 h-8 animate-spin" />
-                    <span className="font-bold">Identificando espécie e completando ficha...</span>
-                  </div>
-                )}
-              </div>
-
-              {plantData && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                    A IA tentou preencher toda a ficha. Quando não souber algo, deixe <b>-</b> ou ajuste manualmente antes de salvar.
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Nome Identificado</label>
-                      <input type="text" value={plantData.name} onChange={(e) => patchPlantData({ name: e.target.value })} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none" />
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Espécie</label>
-                      <input type="text" value={plantData.species} onChange={(e) => patchPlantData({ species: e.target.value })} className="w-full bg-transparent font-medium text-slate-600 italic focus:outline-none" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Onde ela vai ficar?</label>
-                      <select value={selectedLocation} onChange={(e) => setSelectedLocation(e.target.value)} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none">
-                        {locations.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Status</label>
-                      <select value={plantData.status} onChange={(e) => patchPlantData({ status: e.target.value })} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none">
-                        {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                      <label className="text-xs font-bold text-emerald-600 uppercase mb-1 block">Frequência de Rega</label>
-                      <select value={plantData.wateringFrequency} onChange={(e) => patchPlantData({ wateringFrequency: e.target.value })} className="w-full bg-transparent font-bold text-emerald-900 focus:outline-none appearance-none">
-                        {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Tamanho do vaso</label>
-                      <select value={normalizeChoice(plantData.potSize)} onChange={(e) => patchPlantData({ potSize: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Material de filtragem</label>
-                      <select value={normalizeChoice(plantData.filterMaterial)} onChange={(e) => patchPlantData({ filterMaterial: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Substrato principal</label>
-                      <select value={normalizeChoice(plantData.substrate)} onChange={(e) => patchPlantData({ substrate: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                      <input type="text" value={normalizeChoice(plantData.substrateMix)} onChange={(e) => patchPlantData({ substrateMix: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da mistura ou -" />
-                    </div>
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Drenagem</label>
-                      <select value={normalizeChoice(plantData.drainage)} onChange={(e) => patchPlantData({ drainage: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                      <input type="text" value={normalizeChoice(plantData.drainageLayer)} onChange={(e) => patchPlantData({ drainageLayer: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada ou -" />
-                    </div>
-                  </div>
-
-                  <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                    <label className="text-xs font-bold text-blue-600 uppercase mb-1 block">Dica de Cuidado</label>
-                    <textarea value={plantData.notes} onChange={(e) => patchPlantData({ notes: e.target.value })} className="w-full bg-transparent text-blue-900 focus:outline-none resize-none h-20" />
-                  </div>
-
-                  <StockSuggestionPanel
-                    summary={aiStockSuggestion}
-                    items={aiStockBundle.items}
-                    onApply={applyAiStockSuggestion}
-                    disabled={!Object.keys(aiStockBundle.patch).length}
-                    message={stockMessage}
-                  />
-
-                  <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 space-y-4">
-                    <div className="flex items-start gap-3 text-sm text-amber-900">
-                      <ThermometerSun className="w-5 h-5 shrink-0 text-amber-500" />
-                      <div>
-                        <div className="font-bold">Leitura automática de luminosidade do scan</div>
-                        <p>{lightMeasurement ? `Estimativa atual: ${lightMeasurement.level} • ${lightMeasurement.sunPeriod}. ${lightMeasurement.explanation}` : 'Ao escanear a planta, o app também tenta medir a luminosidade do local pela mesma foto.'}</p>
-                      </div>
-                    </div>
-                    <div className="rounded-2xl bg-white p-4 border border-amber-100 text-sm text-slate-700">
-                      <b>Para melhor precisão:</b> {lightMeasurement?.middayTip || MIDDAY_LIGHT_GUIDE}
-                    </div>
-                    {lightMeasurement && (
-                      <div className="grid gap-3 md:grid-cols-[1fr,auto] md:items-center">
-                        <div className="rounded-2xl bg-white p-4 border border-emerald-100 text-sm text-slate-700 space-y-2">
-                          <p><b>Luz estimada:</b> {lightMeasurement.level}</p>
-                          <p><b>Período de sol:</b> {lightMeasurement.sunPeriod}</p>
-                          <p><b>Dica:</b> {lightMeasurement.tip}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleApplyDetectedLight}
-                          disabled={applyingLight || !selectedLocation}
-                          className="px-4 py-3 rounded-2xl bg-emerald-500 text-white font-bold hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          {applyingLight ? 'Aplicando...' : 'Aplicar ao ambiente'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex gap-3 pt-4">
-                    {!confirmed ? (
-                      <button onClick={handleSave} className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2">
-                        <CheckCircle2 className="w-5 h-5" /> Confirmar e Salvar
-                      </button>
-                    ) : (
-                      <div className="flex-[2] py-4 bg-emerald-100 text-emerald-700 rounded-2xl font-bold flex items-center justify-center gap-2">
-                        <CheckCircle2 className="w-5 h-5" /> Salvo no Jardim
-                      </div>
-                    )}
-                    <button onClick={resetAiState} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors">
-                      Novo Scan
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-
-              {error && (
-                <div className="p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm font-medium">
-                  {error}
-                  <button onClick={resetAiState} className="block mt-2 underline">Tentar novamente</button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Use <b>-</b> quando não souber ou não quiser preencher um campo. O app vai sugerir a melhor combinação possível com base no estoque.
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Nome da planta</label>
-              <input type="text" value={manualPlant.name || ''} onChange={(e) => setManualPlant({ ...manualPlant, name: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Babosa" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Nome científico</label>
-              <input type="text" value={manualPlant.species || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, species: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Aloe vera ou -" />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Ambiente</label>
-              <select value={manualPlant.locationId || locations[0]?.id || ''} onChange={(e) => setManualPlant({ ...manualPlant, locationId: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {locations.map((location: any) => <option key={location.id} value={location.id}>{location.name}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Status</label>
-              <select value={manualPlant.status || 'Saudável'} onChange={(e) => setManualPlant({ ...manualPlant, status: e.target.value as Plant['status'] })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Frequência de rega</label>
-              <select value={manualPlant.wateringFrequency || 'Semanal'} onChange={(e) => setManualPlant({ ...manualPlant, wateringFrequency: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Tamanho do vaso</label>
-              <select value={normalizeChoice(manualPlant.potSize)} onChange={(e) => setManualPlant({ ...manualPlant, potSize: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Material de filtragem</label>
-              <select value={normalizeChoice(manualPlant.filterMaterial)} onChange={(e) => setManualPlant({ ...manualPlant, filterMaterial: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Substrato principal</label>
-              <select value={normalizeChoice(manualPlant.substrate)} onChange={(e) => setManualPlant({ ...manualPlant, substrate: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-              <input type="text" value={manualPlant.substrateMix || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, substrateMix: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes ou mistura personalizada / -" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Drenagem</label>
-              <select value={normalizeChoice(manualPlant.drainage)} onChange={(e) => setManualPlant({ ...manualPlant, drainage: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-              <input type="text" value={manualPlant.drainageLayer || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, drainageLayer: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada / -" />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700">Observações</label>
-            <textarea value={manualPlant.notes || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })} className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none" placeholder="Cuidados, histórico, origem da muda ou -" />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700">Foto manual da planta</label>
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
-              <Camera className="w-4 h-4" /> Adicionar foto
-              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualImage} />
-            </label>
-            {manualPlant.image && <img src={manualPlant.image} alt="Planta manual" className="w-full h-48 object-cover rounded-2xl border border-slate-200" />}
-          </div>
-
-          <StockSuggestionPanel
-            summary={manualStockSuggestion}
-            items={manualStockBundle.items}
-            onApply={applyManualStockSuggestion}
-            disabled={!Object.keys(manualStockBundle.patch).length}
-            message={stockMessage}
-          />
-
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
-            <button onClick={handleManualSave} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20">
-              Salvar planta manualmente
-            </button>
-            <button
-              onClick={() => { setManualPlant({
-                name: '', species: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION, image: ''
-              }); setStockMessage(null); }}
-              className="sm:w-48 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
-            >
-              Limpar
-            </button>
-          </div>
-        </div>
-      )}
-    </motion.div>
-  );
+  const manualEnvironment = useMemo(() => getPlantEnvironmentRecommendation(manualPlant, locations), [manualPlant, locations]);
+  const applyManualStockSuggestion = () => { const patch = manualStockBundle.patch; if (!Object.keys(patch).length) { setStockMessage('A ficha manual já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.'); return; } setManualPlant(prev => ({ ...prev, ...patch })); setStockMessage('Sugestões do estoque aplicadas aos campos técnicos em aberto.'); };
+  const applyLookupStockSuggestion = () => { if (!lookupResult) return; const patch = lookupResult.stockBundle.patch; if (!Object.keys(patch).length) { setStockMessage('A ficha pesquisada já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.'); return; } patchLookupDraft(patch); setStockMessage('Sugestões do estoque aplicadas ao preenchimento automático.'); };
+  const handleManualImage = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onloadend = () => setManualPlant(prev => ({ ...prev, image: reader.result as string })); reader.readAsDataURL(file); };
+  const handleLookupSearch = () => { const result = getPlantLookupSuggestion(lookupQuery, stock, locations); if (!result) { setLookupResult(null); setLookupMessage('Não achei uma ficha local para esse nome. Tente outro nome popular, um apelido comum ou use o cadastro manual.'); setConfirmed(false); return; } setLookupResult(result); setSelectedLocation(result.environment.best?.id || locations[0]?.id || ''); setLookupMessage(`Ficha local encontrada para ${result.entry.canonicalName}. Revise os campos e salve.`); setConfirmed(false); setStockMessage(null); };
+  const handleManualAutofill = () => { const result = getPlantLookupSuggestion(manualPlant.name || '', stock, locations); if (!result) { setManualLookupMessage('Não encontrei uma ficha local para esse nome popular. Você pode preencher manualmente.'); return; } setManualPlant(prev => ({ ...prev, ...result.draft, locationId: prev.locationId || result.environment.best?.id || locations[0]?.id || '' })); setManualLookupMessage(`Preenchimento automático aplicado para ${result.entry.canonicalName}. Revise os dados antes de salvar.`); setStockMessage(null); };
+  const handleSaveLookup = () => { if (!lookupResult) return; const draft = normalizePlantRecord({ ...lookupResult.draft, locationId: selectedLocation || lookupResult.environment.best?.id || locations[0]?.id || '1' }); const newPlant: Plant = normalizePlantRecord({ ...draft, id: makeId(), createdAt: new Date().toISOString(), lastWatered: draft.lastWatered || new Date().toISOString(), photoHistory: draft.image ? [createPhotoEntry(draft.image, 'Registro inicial por pesquisa de nome', 'Pesquisa local')] : [] }); addPlant(newPlant); addToHistory({ type: 'Identificação', title: `Cadastro por nome: ${newPlant.name}`, details: `Espécie: ${newPlant.species}
+Categoria: ${newPlant.category || '-'}
+Melhor ambiente sugerido: ${lookupResult.environment.best?.name || '-'}
+Ambiente salvo: ${locations.find((l: any) => l.id === newPlant.locationId)?.name || '-'}`, image: newPlant.image }); setConfirmed(true); };
+  const handleManualSave = () => { if (!manualPlant.name?.trim()) { alert('Digite pelo menos o nome da planta.'); return; } const newPlant: Plant = normalizePlantRecord({ ...manualPlant, id: makeId(), name: manualPlant.name.trim(), locationId: manualPlant.locationId || locations[0]?.id || '1', createdAt: new Date().toISOString(), photoHistory: manualPlant.image ? [createPhotoEntry(manualPlant.image, 'Registro inicial manual', 'Cadastro manual')] : [] }); addPlant(newPlant); addToHistory({ type: 'Atualização', title: `Cadastro manual: ${newPlant.name}`, details: `Espécie: ${newPlant.species}
+Categoria: ${newPlant.category || '-'}
+Local: ${locations.find((l: any) => l.id === newPlant.locationId)?.name || '-'}
+Compatibilidade sugerida: ${manualEnvironment.best?.name || '-'}`, image: newPlant.image }); };
+  const lookupEnvironment = lookupResult?.environment; const lookupDraft = lookupResult?.draft;
+  return (<motion.div key="identify" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="max-w-4xl mx-auto space-y-8"><div className="text-center"><h2 className="text-3xl font-bold text-slate-900 mb-2">Adicionar Planta</h2><p className="text-slate-500">Pesquisa por nome popular com base local, autopreenchimento técnico e sugestão automática de ambiente. O reconhecimento por imagem foi retirado desta etapa.</p></div><div className="flex bg-slate-100 p-1 rounded-2xl w-full sm:w-fit mx-auto"><button onClick={() => setMode('lookup')} className={`px-5 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'lookup' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Pesquisar por nome</button><button onClick={() => setMode('manual')} className={`px-5 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Cadastro manual</button></div>{mode === 'lookup' ? (<div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6"><div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">Digite o nome popular da planta. O app cruza sua base botânica local com os ambientes cadastrados e sugere a ficha técnica mais provável, sem depender de foto.</div><div className="grid grid-cols-1 md:grid-cols-[1fr,220px] gap-4 items-end"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Nome popular ou apelido</label><input type="text" value={lookupQuery} onChange={(e) => setLookupQuery(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: jiboia, babosa, espada de sao jorge" /></div><button onClick={handleLookupSearch} className="w-full py-3 rounded-xl bg-emerald-500 text-white font-bold hover:bg-emerald-600 transition-colors">Pesquisar e preencher</button></div>{lookupMessage && <div className={`rounded-2xl px-4 py-3 text-sm ${lookupResult ? 'bg-blue-50 border border-blue-100 text-blue-800' : 'bg-amber-50 border border-amber-100 text-amber-800'}`}>{lookupMessage}</div>}{lookupResult && lookupDraft && (<div className="space-y-6"><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Nome da planta</label><input type="text" value={lookupDraft.name} onChange={(e) => patchLookupDraft({ name: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Nome científico</label><input type="text" value={lookupDraft.species || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ species: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div></div><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Categoria</label><input type="text" value={lookupDraft.category || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ category: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Subcategoria</label><input type="text" value={lookupDraft.subCategory || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ subCategory: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Crescimento</label><input type="text" value={lookupDraft.growthType || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ growthType: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div></div><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Luz ideal</label><input type="text" value={lookupDraft.preferredLight || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ preferredLight: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Uso</label><input type="text" value={lookupDraft.indoorOutdoor || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ indoorOutdoor: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Toxicidade</label><input type="text" value={lookupDraft.toxicInfo || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ toxicInfo: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Ambiente</label><select value={selectedLocation} onChange={(e) => setSelectedLocation(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{locations.map((location: any) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Frequência de rega</label><select value={lookupDraft.wateringFrequency || 'Semanal'} onChange={(e) => patchLookupDraft({ wateringFrequency: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Substrato</label><input type="text" value={lookupDraft.substrateMix || lookupDraft.substrate || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ substrateMix: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Drenagem</label><input type="text" value={lookupDraft.drainageLayer || lookupDraft.drainage || UNKNOWN_OPTION} onChange={(e) => patchLookupDraft({ drainageLayer: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div></div><div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4 text-sm text-blue-900 space-y-2"><div><b>Melhor ambiente sugerido:</b> {lookupEnvironment?.best?.name || '-'} • {lookupEnvironment?.best?.label || '-'} ({lookupEnvironment?.best?.score || 0}%)</div><div><b>Motivo:</b> {lookupEnvironment?.best?.reason || 'Cadastre ambientes para receber recomendação automática.'}</div>{lookupEnvironment?.best?.id && lookupEnvironment.best.id !== selectedLocation && <button onClick={() => setSelectedLocation(lookupEnvironment.best!.id)} className="inline-flex rounded-xl bg-white px-3 py-2 font-bold text-blue-700 hover:bg-blue-100">Aplicar ambiente sugerido</button>}</div><StockSuggestionPanel summary={lookupResult.stockBundle.summary} items={lookupResult.stockBundle.items} onApply={applyLookupStockSuggestion} disabled={!Object.keys(lookupResult.stockBundle.patch).length} message={stockMessage} /><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Observações</label><textarea value={lookupDraft.notes || ''} onChange={(e) => patchLookupDraft({ notes: e.target.value })} className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none" /></div><div className="flex flex-col sm:flex-row gap-3"><button onClick={handleSaveLookup} className="flex-1 py-4 rounded-2xl bg-emerald-500 text-white font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20">Salvar planta pesquisada</button><button onClick={() => { setLookupResult(null); setLookupQuery(''); setLookupMessage(null); setStockMessage(null); setConfirmed(false); }} className="sm:w-48 py-4 rounded-2xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200 transition-colors">Limpar</button></div>{confirmed && <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">Planta salva com a ficha preenchida por nome popular.</div>}</div>)}</div>) : (<div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6"><div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">Use <b>-</b> quando não souber ou não quiser preencher um campo. O app usa base local por nome popular, sugestões de ambiente e sugestões com base no estoque.</div><div className="grid grid-cols-1 md:grid-cols-[1fr,220px] gap-4 items-end"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Nome da planta</label><input type="text" value={manualPlant.name || ''} onChange={(e) => setManualPlant({ ...manualPlant, name: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Babosa" /></div><button onClick={handleManualAutofill} className="w-full py-3 rounded-xl bg-blue-500 text-white font-bold hover:bg-blue-600 transition-colors">Autopreencher pelo nome</button></div>{manualLookupMessage && <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">{manualLookupMessage}</div>}<div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Nome científico</label><input type="text" value={manualPlant.species || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, species: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Aloe vera ou -" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Categoria</label><input type="text" value={manualPlant.category || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, category: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: suculenta ou -" /></div></div><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Subcategoria</label><input type="text" value={manualPlant.subCategory || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, subCategory: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Crescimento</label><input type="text" value={manualPlant.growthType || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, growthType: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Luz ideal</label><input type="text" value={manualPlant.preferredLight || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, preferredLight: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div></div><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Uso</label><input type="text" value={manualPlant.indoorOutdoor || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, indoorOutdoor: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Toxicidade</label><input type="text" value={manualPlant.toxicInfo || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, toxicInfo: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Ambiente</label><select value={manualPlant.locationId || locations[0]?.id || ''} onChange={(e) => setManualPlant({ ...manualPlant, locationId: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{locations.map((location: any) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></div></div><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Status</label><select value={manualPlant.status || 'Saudável'} onChange={(e) => setManualPlant({ ...manualPlant, status: e.target.value as Plant['status'] })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Frequência de rega</label><select value={manualPlant.wateringFrequency || 'Semanal'} onChange={(e) => setManualPlant({ ...manualPlant, wateringFrequency: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Tamanho do vaso</label><select value={normalizeChoice(manualPlant.potSize)} onChange={(e) => setManualPlant({ ...manualPlant, potSize: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Material de filtragem</label><select value={normalizeChoice(manualPlant.filterMaterial)} onChange={(e) => setManualPlant({ ...manualPlant, filterMaterial: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Observações</label><input type="text" value={manualPlant.notes || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Histórico ou -" /></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Substrato principal</label><select value={normalizeChoice(manualPlant.substrate)} onChange={(e) => setManualPlant({ ...manualPlant, substrate: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select><input type="text" value={manualPlant.substrateMix || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, substrateMix: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes ou mistura personalizada / -" /></div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Drenagem</label><select value={normalizeChoice(manualPlant.drainage)} onChange={(e) => setManualPlant({ ...manualPlant, drainage: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">{DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select><input type="text" value={manualPlant.drainageLayer || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, drainageLayer: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada / -" /></div></div><div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4 text-sm text-blue-900 space-y-2"><div><b>Melhor ambiente sugerido:</b> {manualEnvironment.best?.name || '-'} • {manualEnvironment.best?.label || '-'} ({manualEnvironment.best?.score || 0}%)</div><div><b>Motivo:</b> {manualEnvironment.best?.reason || 'Cadastre ambientes para receber recomendação automática.'}</div>{manualEnvironment.best?.id && manualEnvironment.best.id !== manualPlant.locationId && <button onClick={() => setManualPlant(prev => ({ ...prev, locationId: manualEnvironment.best!.id }))} className="inline-flex rounded-xl bg-white px-3 py-2 font-bold text-blue-700 hover:bg-blue-100">Aplicar ambiente sugerido</button>}</div><div className="space-y-2"><label className="text-sm font-semibold text-slate-700">Foto manual da planta</label><label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors"><Camera className="w-4 h-4" /> Adicionar foto<input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualImage} /></label>{manualPlant.image && <img src={manualPlant.image} alt="Planta manual" className="w-full h-48 object-cover rounded-2xl border border-slate-200" />}</div><StockSuggestionPanel summary={manualStockBundle.summary} items={manualStockBundle.items} onApply={applyManualStockSuggestion} disabled={!Object.keys(manualStockBundle.patch).length} message={stockMessage} /><div className="flex flex-col sm:flex-row gap-3 pt-2"><button onClick={handleManualSave} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20">Salvar planta manualmente</button><button onClick={() => { setManualPlant({ name: '', species: UNKNOWN_OPTION, category: UNKNOWN_OPTION, subCategory: UNKNOWN_OPTION, growthType: UNKNOWN_OPTION, preferredLight: UNKNOWN_OPTION, indoorOutdoor: UNKNOWN_OPTION, toxicInfo: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION, image: '' }); setStockMessage(null); setManualLookupMessage(null); }} className="sm:w-48 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors">Limpar</button></div></div>)}</motion.div>);
 }
 
 function SettingsView({ settings, saveSettings, setSettings, data }: any) {
@@ -4823,6 +4442,7 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
             <div className="mb-4">
               <h4 className="font-bold text-lg text-slate-900 leading-tight mb-1">{plant.name}</h4>
               <p className="text-sm text-slate-500 italic">{plant.species}</p>
+              {(plant.category && plant.category !== UNKNOWN_OPTION) && <p className="text-xs text-emerald-700 font-semibold mt-1">{plant.category}{plant.subCategory && plant.subCategory !== UNKNOWN_OPTION ? ` • ${plant.subCategory}` : ''}</p>}
             </div>
 
             <div className="space-y-2 mb-6 flex-1">
@@ -4868,6 +4488,12 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
                 </div>
                 <div className="flex items-center gap-2 text-xs text-slate-600">
                   <FileText className="w-3.5 h-3.5 text-slate-400" /> Material Filtragem: {plant.filterMaterial || '---'}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-600">
+                  <Sun className="w-3.5 h-3.5 text-slate-400" /> Luz ideal: {plant.preferredLight || '---'}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-600">
+                  <ShieldCheck className="w-3.5 h-3.5 text-slate-400" /> Toxicidade: {plant.toxicInfo || '---'}
                 </div>
               </div>
             </div>
