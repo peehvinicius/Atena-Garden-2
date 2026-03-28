@@ -154,6 +154,14 @@ interface ForecastData {
   rainProb: number;
 }
 
+interface LightAnalysisResult {
+  level: string;
+  sunPeriod: string;
+  explanation: string;
+  tip: string;
+  middayTip: string;
+}
+
 interface AppSettings {
   weatherMode: 'auto' | 'manual';
   gardenAddress: string;
@@ -259,6 +267,74 @@ const buildStockContext = (stock: StockItem[]) => {
     })
     .join(', ');
 };
+
+const LIGHT_LEVEL_OPTIONS = ['Sol Pleno', 'Sol Parcial', 'Meia Sombra', 'Sombra', 'Luz Indireta'];
+const SUN_PERIOD_OPTIONS = ['Dia inteiro', 'Manhã', 'Tarde', 'Parcial', 'Não recebe sol direto'];
+const MIDDAY_LIGHT_GUIDE = 'Faça a medição preferencialmente ao meio-dia, sem flash, para captar o pico de luminosidade com mais precisão.';
+
+const normalizeLightLevel = (value?: string | null) => {
+  const clean = normalizeChoice(value);
+  if (LIGHT_LEVEL_OPTIONS.includes(clean)) return clean;
+  if (/pleno/i.test(clean)) return 'Sol Pleno';
+  if (/parcial/i.test(clean)) return 'Sol Parcial';
+  if (/meia/i.test(clean)) return 'Meia Sombra';
+  if (/indireta/i.test(clean)) return 'Luz Indireta';
+  if (/sombra/i.test(clean)) return 'Sombra';
+  return 'Meia Sombra';
+};
+
+const normalizeSunPeriod = (value?: string | null) => {
+  const clean = normalizeChoice(value);
+  if (SUN_PERIOD_OPTIONS.includes(clean)) return clean;
+  if (/dia/i.test(clean)) return 'Dia inteiro';
+  if (/manh/i.test(clean)) return 'Manhã';
+  if (/tarde/i.test(clean)) return 'Tarde';
+  if (/direto/i.test(clean) || /parcial/i.test(clean)) return 'Parcial';
+  if (/n[aã]o/i.test(clean) || /sombra/i.test(clean) || /indireta/i.test(clean)) return 'Não recebe sol direto';
+  return 'Parcial';
+};
+
+async function analyzeLightWithAI(base64Image: string): Promise<LightAnalysisResult> {
+  const ai = getGeminiClient();
+  const model = 'gemini-2.5-flash';
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{
+      parts: [
+        { text: `Analise esta foto do local ou da planta no ambiente e estime a luminosidade do ponto fotografado. Responda em Português do Brasil em JSON.
+
+Escolha level entre: ${LIGHT_LEVEL_OPTIONS.join(', ')}.
+Escolha sunPeriod entre: ${SUN_PERIOD_OPTIONS.join(', ')}.
+Explique de forma breve por que chegou nessa conclusão.
+Dê uma dica curta de cultivo para esse tipo de luz.
+No campo middayTip, sempre oriente que a medição ideal deve ser feita ao meio-dia para maior precisão do pico de luminosidade.` },
+        { inlineData: { data: base64Image.split(',')[1], mimeType: 'image/jpeg' } }
+      ]
+    }],
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          level: { type: Type.STRING },
+          sunPeriod: { type: Type.STRING },
+          explanation: { type: Type.STRING },
+          tip: { type: Type.STRING },
+          middayTip: { type: Type.STRING }
+        },
+        required: ['level', 'sunPeriod', 'explanation', 'tip', 'middayTip']
+      }
+    }
+  });
+  const data = JSON.parse(response.text || '{}');
+  return {
+    level: normalizeLightLevel(data.level),
+    sunPeriod: normalizeSunPeriod(data.sunPeriod),
+    explanation: normalizeChoice(data.explanation),
+    tip: normalizeChoice(data.tip),
+    middayTip: normalizeChoice(data.middayTip) === UNKNOWN_OPTION ? MIDDAY_LIGHT_GUIDE : normalizeChoice(data.middayTip),
+  };
+}
 
 const getAvailableStockByCategory = (stock: StockItem[], category: string) =>
   stock.filter(item => item.quantity > 0 && item.category.toLowerCase().includes(category.toLowerCase()));
@@ -933,6 +1009,29 @@ export default function App() {
     showToast(`Ambiente ${location.name} removido`);
   };
 
+  const handleApplyLightToLocation = (locationId: string, analysis: LightAnalysisResult) => {
+    const current = locations.find(location => location.id === locationId);
+    if (!current) {
+      showToast('Escolha um ambiente válido para aplicar a medição de luz.');
+      return;
+    }
+
+    const updated = normalizeLocation({
+      ...current,
+      light: analysis.level,
+      sunPeriod: analysis.sunPeriod,
+      notes: [current.notes, `Leitura IA: ${analysis.explanation}`, analysis.middayTip].filter(Boolean).join('\n'),
+    });
+
+    setLocations(prev => prev.map(location => location.id === locationId ? updated : location));
+    addToHistory({
+      type: 'Atualização',
+      title: `Luminosidade atualizada em ${updated.name}`,
+      details: `${updated.light} • ${updated.sunPeriod}\n${analysis.explanation}\n${analysis.middayTip}`,
+    });
+    showToast(`Leitura de luz aplicada ao ambiente ${updated.name}.`);
+  };
+
   const handleUpdateGermination = (updated: Germination) => {
     setGerminations(prev => prev.map(g => g.id === updated.id ? updated : g));
   };
@@ -1151,7 +1250,6 @@ export default function App() {
           <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ferramentas</div>
           <SidebarLink icon={Scan} label="Identificar Planta" active={activeTab === 'identify'} onClick={() => setActiveTab('identify')} />
           <SidebarLink icon={Bug} label="Diagnóstico IA" active={activeTab === 'diagnose'} onClick={() => setActiveTab('diagnose')} />
-          <SidebarLink icon={Sun} label="Medidor de Luz" active={activeTab === 'light-meter'} onClick={() => setActiveTab('light-meter')} />
           
           <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Histórico</div>
           <SidebarLink icon={LogsIcon} label="Histórico de Regas" active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
@@ -1168,10 +1266,13 @@ export default function App() {
       </aside>
 
       {/* Mobile Nav */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-slate-200 px-2 pt-3 pb-6 flex justify-around items-center z-[100] overflow-visible shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
-        <MobileNavItem icon={LayoutDashboard} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-        <MobileNavItem icon={Sprout} active={activeTab === 'plants'} onClick={() => setActiveTab('plants')} />
-        <div className="relative -top-10 px-1 overflow-visible">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg border-t border-slate-200 px-2 pt-3 pb-6 flex items-end justify-between z-[100] overflow-visible shadow-[0_-4px_20px_rgba(0,0,0,0.05)] gap-1">
+        <div className="flex flex-1 items-end justify-around">
+          <MobileNavItem icon={LayoutDashboard} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+          <MobileNavItem icon={Sprout} active={activeTab === 'plants'} onClick={() => setActiveTab('plants')} />
+          <MobileNavItem icon={MapPin} active={activeTab === 'places'} onClick={() => setActiveTab('places')} />
+        </div>
+        <div className="relative -top-10 px-1 overflow-visible shrink-0">
           <button 
             onClick={() => setActiveTab('identify')}
             className={`w-18 h-18 rounded-full flex items-center justify-center text-white shadow-[0_8px_30px_rgba(16,185,129,0.4)] border-4 border-white transition-all active:scale-95 ${activeTab === 'identify' ? 'bg-emerald-600 scale-110' : 'bg-emerald-500'}`}
@@ -1179,8 +1280,10 @@ export default function App() {
             <Scan className="w-9 h-9" />
           </button>
         </div>
-        <MobileNavItem icon={Bug} active={activeTab === 'diagnose'} onClick={() => setActiveTab('diagnose')} />
-        <MobileNavItem icon={Settings} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+        <div className="flex flex-1 items-end justify-around">
+          <MobileNavItem icon={Bug} active={activeTab === 'diagnose'} onClick={() => setActiveTab('diagnose')} />
+          <MobileNavItem icon={StockIcon} active={activeTab === 'stock'} onClick={() => setActiveTab('stock')} />
+        </div>
       </nav>
 
       {/* Main Content */}
@@ -1251,6 +1354,13 @@ export default function App() {
               <span className="hidden sm:inline">Alertas</span>
               <span className="inline-flex min-w-6 justify-center rounded-full bg-amber-500 px-2 py-0.5 text-xs font-bold text-white">{activeAlerts.length}</span>
             </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className="md:hidden flex items-center justify-center bg-white border border-slate-200 px-3 py-2.5 rounded-xl font-semibold text-slate-700 hover:border-slate-300 hover:bg-slate-50 transition-colors"
+              aria-label="Abrir configurações"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
             <button 
               onClick={() => setActiveTab('identify')}
               className="hidden md:flex items-center gap-2 bg-emerald-500 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
@@ -1308,6 +1418,7 @@ export default function App() {
               plants={plants} 
               onSaveLocation={handleSaveLocation}
               onDeleteLocation={handleDeleteLocation}
+              addToHistory={addToHistory}
             />
           )}
 
@@ -1362,6 +1473,7 @@ export default function App() {
               locations={locations}
               stock={stock}
               addToHistory={addToHistory}
+              onApplyLightToLocation={handleApplyLightToLocation}
             />
           )}
 
@@ -1731,7 +1843,7 @@ function PlantsView({ filteredPlants, locations, onWater, onUpdate, onRepot, onD
   );
 }
 
-function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation }: { locations: Location[], plants: Plant[], onSaveLocation: (location: Location) => void, onDeleteLocation: (id: string) => void }) {
+function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addToHistory }: { locations: Location[], plants: Plant[], onSaveLocation: (location: Location) => void, onDeleteLocation: (id: string) => void, addToHistory: (item: Omit<HistoryItem, 'id' | 'date'>) => void }) {
   const [draft, setDraft] = useState<Location>({
     id: '',
     name: '',
@@ -1742,22 +1854,65 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation }: { l
     sunPeriod: 'Parcial',
     notes: ''
   });
+  const [lightScanImage, setLightScanImage] = useState<string | null>(null);
+  const [lightAnalyzing, setLightAnalyzing] = useState(false);
+  const [lightResult, setLightResult] = useState<LightAnalysisResult | null>(null);
+  const [lightError, setLightError] = useState<string | null>(null);
 
   const groupedLocations = locations.map(location => ({
     ...location,
     plants: plants.filter(plant => plant.locationId === location.id),
   }));
 
-  const resetDraft = () => setDraft({
-    id: '',
-    name: '',
-    light: 'Meia Sombra',
-    exposure: 'Interno',
-    covered: true,
-    receivesRain: false,
-    sunPeriod: 'Parcial',
-    notes: ''
-  });
+  const resetDraft = () => {
+    setDraft({
+      id: '',
+      name: '',
+      light: 'Meia Sombra',
+      exposure: 'Interno',
+      covered: true,
+      receivesRain: false,
+      sunPeriod: 'Parcial',
+      notes: ''
+    });
+    setLightScanImage(null);
+    setLightResult(null);
+    setLightError(null);
+  };
+
+  const handleLightCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const result = reader.result as string;
+      setLightScanImage(result);
+      setLightAnalyzing(true);
+      setLightError(null);
+      try {
+        const analysis = await analyzeLightWithAI(result);
+        setLightResult(analysis);
+        setDraft(prev => ({
+          ...prev,
+          light: analysis.level,
+          sunPeriod: analysis.sunPeriod,
+          notes: [prev.notes, `Leitura IA: ${analysis.explanation}`, analysis.middayTip].filter(Boolean).join('\n')
+        }));
+        addToHistory({
+          type: 'Atualização',
+          title: `Medição de luz do ambiente ${draft.name || 'novo ambiente'}`,
+          details: `${analysis.level} • ${analysis.sunPeriod}\n${analysis.explanation}\n${analysis.middayTip}`,
+          image: result,
+        });
+      } catch (err) {
+        console.error(err);
+        setLightError(getGeminiErrorMessage(err, 'Não consegui medir a luminosidade agora. Tente outra foto do ambiente, preferencialmente ao meio-dia.'));
+      } finally {
+        setLightAnalyzing(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   const saveDraft = () => {
     if (!draft.name.trim()) return;
@@ -1818,6 +1973,41 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation }: { l
           placeholder="Anotações do ambiente"
           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl min-h-[88px]"
         />
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 space-y-4">
+          <div className="flex items-start gap-3 text-sm text-amber-900">
+            <ThermometerSun className="w-5 h-5 shrink-0 text-amber-500" />
+            <div>
+              <div className="font-bold">Medição de luminosidade integrada ao ambiente</div>
+              <p>{MIDDAY_LIGHT_GUIDE}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3 items-center">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600 transition-colors">
+              <Sun className="w-4 h-4" /> Medir luz deste ambiente
+              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleLightCapture} />
+            </label>
+            {lightAnalyzing && <span className="text-sm font-medium text-emerald-700">Analisando luminosidade...</span>}
+          </div>
+          {lightScanImage && (
+            <div className="overflow-hidden rounded-2xl border border-amber-100 bg-white">
+              <img src={lightScanImage} alt="Leitura do ambiente" className="h-40 w-full object-cover" />
+            </div>
+          )}
+          {lightResult && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl bg-white p-4 border border-emerald-100">
+                <div className="text-xs font-bold uppercase tracking-wider text-emerald-600 mb-1">Luz estimada</div>
+                <div className="text-lg font-bold text-slate-900">{lightResult.level}</div>
+                <div className="text-sm text-slate-500">{lightResult.sunPeriod}</div>
+              </div>
+              <div className="rounded-2xl bg-white p-4 border border-blue-100 text-sm text-slate-700 space-y-2">
+                <p><b>Leitura:</b> {lightResult.explanation}</p>
+                <p><b>Dica:</b> {lightResult.tip}</p>
+              </div>
+            </div>
+          )}
+          {lightError && <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{lightError}</div>}
+        </div>
         <div className="flex flex-wrap gap-4">
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={!!draft.covered} onChange={(e) => setDraft({ ...draft, covered: e.target.checked })} /> Coberto
@@ -2707,36 +2897,7 @@ function LightMeterView() {
     setAnalyzing(true);
     setError(null);
     try {
-      const ai = getGeminiClient();
-      const model = "gemini-2.5-flash";
-      
-      const prompt = "Analise esta foto do local onde uma planta está. Estime o nível de luminosidade (Sol Pleno, Meia Sombra, Sombra ou Luz Indireta). Explique brevemente por que e dê uma dica de qual tipo de planta se daria bem aí. Responda em Português do Brasil em formato JSON.";
-      
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inlineData: { data: base64Image.split(',')[1], mimeType: "image/jpeg" } }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              level: { type: Type.STRING, description: "Nível de luz (ex: Sol Pleno)" },
-              explanation: { type: Type.STRING, description: "Explicação curta" },
-              tip: { type: Type.STRING, description: "Dica de planta" }
-            },
-            required: ["level", "explanation", "tip"]
-          }
-        }
-      });
-
-      const data = JSON.parse(response.text || "{}");
+      const data = await analyzeLightWithAI(base64Image);
       setResult(data);
     } catch (err: any) {
       console.error(err);
@@ -2793,6 +2954,7 @@ function LightMeterView() {
                     <Sun className="w-4 h-4" /> Resultado da Análise
                   </div>
                   <div className="text-2xl font-bold text-emerald-900 mb-2">{result.level}</div>
+                  <p className="text-sm font-semibold text-emerald-700 mb-2">{result.sunPeriod}</p>
                   <p className="text-emerald-800 leading-relaxed">{result.explanation}</p>
                 </div>
 
@@ -2825,7 +2987,7 @@ function LightMeterView() {
       <div className="bg-amber-50 border border-amber-100 p-6 rounded-2xl flex gap-4">
         <AlertCircle className="w-6 h-6 text-amber-500 shrink-0" />
         <div className="text-sm text-amber-900 leading-relaxed">
-          <b>Dica:</b> Para uma medição mais precisa, tire a foto no horário de maior incidência solar (geralmente entre 10h e 14h) e evite usar o flash.
+          <b>Dica:</b> Faça a medição preferencialmente ao meio-dia, sem flash, para capturar melhor o pico de luminosidade do ambiente.
         </div>
       </div>
     </motion.div>
@@ -3087,7 +3249,7 @@ function DiagnoseView({ addToHistory, setToast }: any) {
   );
 }
 
-function IdentifyPlantView({ addPlant, locations, stock, addToHistory }: any) {
+function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLightToLocation }: any) {
   const [mode, setMode] = useState<'ai' | 'manual'>('ai');
   const [image, setImage] = useState<string | null>(null);
   const [identifying, setIdentifying] = useState(false);
@@ -3096,6 +3258,8 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory }: any) {
   const [selectedLocation, setSelectedLocation] = useState(locations[0]?.id || '');
   const [confirmed, setConfirmed] = useState(false);
   const [stockMessage, setStockMessage] = useState<string | null>(null);
+  const [lightMeasurement, setLightMeasurement] = useState<LightAnalysisResult | null>(null);
+  const [applyingLight, setApplyingLight] = useState(false);
   const [manualPlant, setManualPlant] = useState<Partial<Plant>>({
     name: '',
     species: UNKNOWN_OPTION,
@@ -3156,6 +3320,7 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory }: any) {
     setConfirmed(false);
     setError(null);
     setStockMessage(null);
+    setLightMeasurement(null);
   };
 
   useEffect(() => {
@@ -3250,11 +3415,36 @@ No campo stockSuggestions, explique objetivamente por que a escolha combina com 
         filterMaterial: matchSelectOption(data.filterMaterial, FILTER_OPTIONS),
         stockSuggestions: normalizeChoice(data.stockSuggestions),
       });
+      try {
+        const lightAnalysis = await analyzeLightWithAI(base64Image);
+        setLightMeasurement(lightAnalysis);
+      } catch (lightErr) {
+        console.error(lightErr);
+        setLightMeasurement(null);
+      }
     } catch (err: any) {
       console.error(err);
       setError(getGeminiErrorMessage(err, 'Erro ao identificar a planta. Tente uma foto mais clara.'));
     } finally {
       setIdentifying(false);
+    }
+  };
+
+  const handleApplyDetectedLight = async () => {
+    if (!lightMeasurement) {
+      setStockMessage('Ainda não há leitura de luminosidade para aplicar.');
+      return;
+    }
+    if (!selectedLocation) {
+      setStockMessage('Escolha um ambiente antes de aplicar a medição de luz.');
+      return;
+    }
+    setApplyingLight(true);
+    try {
+      await onApplyLightToLocation?.(selectedLocation, lightMeasurement);
+      setStockMessage(`Leitura de luminosidade aplicada ao ambiente ${locations.find((l: any) => l.id === selectedLocation)?.name || ''}.`);
+    } finally {
+      setApplyingLight(false);
     }
   };
 
@@ -3462,6 +3652,36 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
                     disabled={!Object.keys(aiStockBundle.patch).length}
                     message={stockMessage}
                   />
+
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 space-y-4">
+                    <div className="flex items-start gap-3 text-sm text-amber-900">
+                      <ThermometerSun className="w-5 h-5 shrink-0 text-amber-500" />
+                      <div>
+                        <div className="font-bold">Leitura automática de luminosidade do scan</div>
+                        <p>{lightMeasurement ? `Estimativa atual: ${lightMeasurement.level} • ${lightMeasurement.sunPeriod}. ${lightMeasurement.explanation}` : 'Ao escanear a planta, o app também tenta medir a luminosidade do local pela mesma foto.'}</p>
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-white p-4 border border-amber-100 text-sm text-slate-700">
+                      <b>Para melhor precisão:</b> {lightMeasurement?.middayTip || MIDDAY_LIGHT_GUIDE}
+                    </div>
+                    {lightMeasurement && (
+                      <div className="grid gap-3 md:grid-cols-[1fr,auto] md:items-center">
+                        <div className="rounded-2xl bg-white p-4 border border-emerald-100 text-sm text-slate-700 space-y-2">
+                          <p><b>Luz estimada:</b> {lightMeasurement.level}</p>
+                          <p><b>Período de sol:</b> {lightMeasurement.sunPeriod}</p>
+                          <p><b>Dica:</b> {lightMeasurement.tip}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleApplyDetectedLight}
+                          disabled={applyingLight || !selectedLocation}
+                          className="px-4 py-3 rounded-2xl bg-emerald-500 text-white font-bold hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {applyingLight ? 'Aplicando...' : 'Aplicar ao ambiente'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
                   <div className="flex gap-3 pt-4">
                     {!confirmed ? (
