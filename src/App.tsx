@@ -83,17 +83,30 @@ interface StockItem {
   unit: string;
   minQuantity: number;
   category: string;
+  usageTags?: string[];
+  notes?: string;
+  image?: string;
 }
 
 interface Germination {
   id: string;
   name: string;
+  species?: string;
   startDate: string;
   expectedDays: number;
-  status: 'Em andamento' | 'Sucesso' | 'Falha';
+  status: 'Em andamento' | 'Sucesso' | 'Falha' | 'Transferida';
   notes?: string;
   lastWatered?: string;
   hydratedWithWarmWater?: boolean;
+  image?: string;
+  plantingInstructions?: string;
+  stockSuggestions?: string;
+  germinationTechniques?: string;
+  hydrationInstructions?: string;
+  recommendedLight?: string;
+  wateringTips?: string;
+  transferredPlantId?: string;
+  transferredAt?: string;
 }
 
 interface HistoryItem {
@@ -119,6 +132,10 @@ interface Location {
   name: string;
   light: string;
   exposure: string;
+  covered?: boolean;
+  receivesRain?: boolean;
+  sunPeriod?: string;
+  notes?: string;
 }
 
 interface WeatherData {
@@ -145,21 +162,325 @@ interface AppSettings {
   geminiApiKey?: string;
 }
 
+interface GardenAlert {
+  id: string;
+  title: string;
+  details: string;
+  severity: 'alta' | 'media' | 'baixa';
+  category: 'Plantas' | 'Estoque' | 'Germinação' | 'Clima' | 'Tarefas';
+  targetTab?: string;
+  createdAt?: string;
+}
+
+interface StockRecommendationItem {
+  key: 'substrate' | 'drainage' | 'filterMaterial' | 'potSize';
+  label: string;
+  recommended: string;
+  inventoryItem?: string;
+  status: 'available' | 'missing' | 'current';
+  hint: string;
+  applyValue?: string;
+}
+
+interface StockRecommendationBundle {
+  summary: string;
+  items: StockRecommendationItem[];
+  patch: Partial<Plant>;
+}
+
+const UNKNOWN_OPTION = '-';
+const PLANT_STATUS_OPTIONS: Plant['status'][] = ['Saudável', 'Recuperação', 'Problema', 'Muda'];
+const WATERING_OPTIONS = ['Diária', 'Semanal', 'Quinzenal', 'Mensal'];
+const POT_OPTIONS = [UNKNOWN_OPTION, 'Copo/mini vaso', 'Pequeno', 'Médio', 'Grande', 'Jardineira'];
+const SUBSTRATE_OPTIONS = [UNKNOWN_OPTION, 'Terra vegetal', 'Terra + húmus', 'Substrato para folhagens', 'Substrato para suculentas', 'Terra + areia', 'Casca de pinus + perlita'];
+const DRAINAGE_OPTIONS = [UNKNOWN_OPTION, 'Sem drenagem extra', 'Argila expandida', 'Brita', 'Areia grossa', 'Carvão vegetal'];
+const FILTER_OPTIONS = [UNKNOWN_OPTION, 'Sem manta', 'Manta bidim', 'Tela plástica', 'Filtro de café'];
+const STOCK_USAGE_TAGS = ['Substrato', 'Drenagem', 'Filtragem', 'Vaso', 'Ferramenta', 'Adubação', 'Germinação', 'Sementes & Mudas', 'Defensivo', 'Irrigação', 'Suporte', 'Outro'];
+
+const normalizeChoice = (value?: string | null) => {
+  const clean = (value || '').trim();
+  return clean ? clean : UNKNOWN_OPTION;
+};
+
+const isUnknownChoice = (value?: string | null) => normalizeChoice(value) === UNKNOWN_OPTION;
+
+const normalizeStockUsageTags = (tags?: unknown) => {
+  const values = Array.isArray(tags)
+    ? tags
+    : typeof tags === 'string'
+      ? tags.split(/[,;|]/)
+      : [];
+
+  const normalized = values
+    .map(value => normalizeChoice(String(value)))
+    .filter(value => value !== UNKNOWN_OPTION);
+
+  return Array.from(new Set(normalized)).filter(tag => STOCK_USAGE_TAGS.includes(tag));
+};
+
+const inferStockUsageTags = (item?: Partial<StockItem> | null) => {
+  if (!item) return [] as string[];
+  const direct = normalizeStockUsageTags(item.usageTags);
+  const combined = [item.name, item.category, item.notes].filter(Boolean).join(' ').toLowerCase();
+  const inferred = new Set<string>(direct);
+
+  if (/substrato|terra|humus|húmus|perlita|pinus|fibra|turfa/.test(combined)) inferred.add('Substrato');
+  if (/argila|brita|areia grossa|carvão|carvao|drenag/.test(combined)) inferred.add('Drenagem');
+  if (/manta|bidim|tela|filtro/.test(combined)) inferred.add('Filtragem');
+  if (/vaso|cachepot|jardineira|recipiente|copo/.test(combined)) inferred.add('Vaso');
+  if (/pá|pa|tesoura|regador|borrifador|ferramenta|pulverizador/.test(combined)) inferred.add('Ferramenta');
+  if (/fertiliz|adubo|bokashi|npk/.test(combined)) inferred.add('Adubação');
+  if (/germina|berçário|bercario|semead/.test(combined)) inferred.add('Germinação');
+  if (/semente|muda|estaca/.test(combined)) inferred.add('Sementes & Mudas');
+  if (/praga|fung|óleo|oleo|neem|defensivo|inseticida/.test(combined)) inferred.add('Defensivo');
+  if (/rega|água|agua|irrig|mangueira|borrifador|regador/.test(combined)) inferred.add('Irrigação');
+  if (/tutor|estaca|suporte|amarra|arame/.test(combined)) inferred.add('Suporte');
+  if (/ferramentas/.test((item.category || '').toLowerCase())) inferred.add('Ferramenta');
+  if (/vasos/.test((item.category || '').toLowerCase())) inferred.add('Vaso');
+  if (/fertilizantes/.test((item.category || '').toLowerCase())) inferred.add('Adubação');
+  if (/sementes/.test((item.category || '').toLowerCase())) {
+    inferred.add('Sementes & Mudas');
+    inferred.add('Germinação');
+  }
+  if (/defensivos/.test((item.category || '').toLowerCase())) inferred.add('Defensivo');
+
+  return Array.from(inferred).filter(tag => STOCK_USAGE_TAGS.includes(tag));
+};
+
+const itemHasStockUsageTag = (item: StockItem, tag: string) => inferStockUsageTags(item).includes(tag);
+
+const buildStockContext = (stock: StockItem[]) => {
+  if (!stock.length) return 'Nenhum item cadastrado em estoque.';
+  return stock
+    .map(item => {
+      const usageTags = inferStockUsageTags(item);
+      const usagePart = usageTags.length ? `; usos: ${usageTags.join(', ')}` : '';
+      return `${item.name} (${item.quantity} ${item.unit}, categoria: ${item.category}${usagePart})`;
+    })
+    .join(', ');
+};
+
+const getAvailableStockByCategory = (stock: StockItem[], category: string) =>
+  stock.filter(item => item.quantity > 0 && item.category.toLowerCase().includes(category.toLowerCase()));
+
+const getAvailableStockByUsageTag = (stock: StockItem[], tag: string) =>
+  stock.filter(item => item.quantity > 0 && itemHasStockUsageTag(item, tag));
+
+const findStockMatch = (stock: StockItem[], value?: string | null) => {
+  const clean = (value || '').trim().toLowerCase();
+  if (!clean || clean === UNKNOWN_OPTION.toLowerCase()) return null;
+  return stock.find(item => item.quantity > 0 && (clean.includes(item.name.toLowerCase()) || item.name.toLowerCase().includes(clean)));
+};
+
+const mapSubstrateOptionFromStock = (item?: StockItem | null) => {
+  if (!item) return UNKNOWN_OPTION;
+  const name = item.name.toLowerCase();
+  if (/suculent/.test(name)) return 'Substrato para suculentas';
+  if (/folhag/.test(name)) return 'Substrato para folhagens';
+  if (/pinus|perlita/.test(name)) return 'Casca de pinus + perlita';
+  if (/húmus|humus/.test(name)) return 'Terra + húmus';
+  if (/areia/.test(name)) return 'Terra + areia';
+  if (/terra|substrato/.test(name)) return 'Terra vegetal';
+  return UNKNOWN_OPTION;
+};
+
+const mapDrainageOptionFromStock = (item?: StockItem | null) => {
+  if (!item) return UNKNOWN_OPTION;
+  const name = item.name.toLowerCase();
+  if (/argila/.test(name)) return 'Argila expandida';
+  if (/brita/.test(name)) return 'Brita';
+  if (/areia/.test(name)) return 'Areia grossa';
+  if (/carvão|carvao/.test(name)) return 'Carvão vegetal';
+  return UNKNOWN_OPTION;
+};
+
+const mapFilterOptionFromStock = (item?: StockItem | null) => {
+  if (!item) return UNKNOWN_OPTION;
+  const name = item.name.toLowerCase();
+  if (/manta|bidim/.test(name)) return 'Manta bidim';
+  if (/tela/.test(name)) return 'Tela plástica';
+  if (/filtro/.test(name)) return 'Filtro de café';
+  return UNKNOWN_OPTION;
+};
+
+const mapPotOptionFromStock = (item?: StockItem | null) => {
+  if (!item) return UNKNOWN_OPTION;
+  const name = item.name.toLowerCase();
+  if (/jardineira/.test(name)) return 'Jardineira';
+  if (/mini|copo/.test(name)) return 'Copo/mini vaso';
+  if (/(^|\s)g($|\s)|grande/.test(name)) return 'Grande';
+  if (/(^|\s)m($|\s)|médio|medio/.test(name)) return 'Médio';
+  if (/(^|\s)p($|\s)|pequeno/.test(name)) return 'Pequeno';
+  return UNKNOWN_OPTION;
+};
+
+const buildStockRecommendationBundle = (stock: StockItem[], fields: Partial<Plant> & { species?: string; notes?: string } = {}): StockRecommendationBundle => {
+  const substrate = normalizeChoice(fields.substrate);
+  const drainage = normalizeChoice(fields.drainage);
+  const filter = normalizeChoice(fields.filterMaterial);
+  const pot = normalizeChoice(fields.potSize);
+
+  const substrateMatch = findStockMatch(stock, fields.substrateMix || substrate) || getAvailableStockByUsageTag(stock, 'Substrato').at(0) || getAvailableStockByCategory(stock, 'Substratos').at(0) || stock.find(item => item.quantity > 0 && /(terra|substrato|húmus|humus|perlita|pinus)/i.test(item.name));
+  const drainageMatch = findStockMatch(stock, fields.drainageLayer || drainage) || getAvailableStockByUsageTag(stock, 'Drenagem').at(0) || stock.find(item => item.quantity > 0 && /(argila|brita|areia|carvão|carvao)/i.test(item.name));
+  const filterMatch = findStockMatch(stock, filter) || getAvailableStockByUsageTag(stock, 'Filtragem').at(0) || stock.find(item => item.quantity > 0 && /(manta|bidim|tela|filtro)/i.test(item.name));
+  const potMatch = findStockMatch(stock, pot) || getAvailableStockByUsageTag(stock, 'Vaso').at(0) || getAvailableStockByCategory(stock, 'Vasos').at(0) || stock.find(item => item.quantity > 0 && /(vaso|jardineira|cachepot|recipiente|copo)/i.test(item.name));
+  const fertilizerMatch = getAvailableStockByUsageTag(stock, 'Adubação').at(0) || getAvailableStockByCategory(stock, 'Fertilizantes').at(0);
+
+  const substrateSuggestion = mapSubstrateOptionFromStock(substrateMatch);
+  const drainageSuggestion = mapDrainageOptionFromStock(drainageMatch);
+  const filterSuggestion = mapFilterOptionFromStock(filterMatch);
+  const potSuggestion = mapPotOptionFromStock(potMatch);
+
+  const makeItem = (
+    key: StockRecommendationItem['key'],
+    label: string,
+    currentValue: string,
+    suggestedValue: string,
+    match: StockItem | undefined,
+    missingHint: string,
+    availableHint: string,
+  ): StockRecommendationItem => {
+    const currentMatch = findStockMatch(stock, currentValue);
+    if (!isUnknownChoice(currentValue) && currentMatch) {
+      return {
+        key,
+        label,
+        recommended: currentValue,
+        inventoryItem: currentMatch.name,
+        status: 'current',
+        hint: `${label}: sua escolha atual já conversa com o estoque por causa de ${currentMatch.name}.`,
+      };
+    }
+
+    if (suggestedValue !== UNKNOWN_OPTION && match) {
+      return {
+        key,
+        label,
+        recommended: suggestedValue,
+        inventoryItem: match.name,
+        status: 'available',
+        hint: availableHint.replace('{item}', match.name).replace('{value}', suggestedValue),
+        applyValue: suggestedValue,
+      };
+    }
+
+    return {
+      key,
+      label,
+      recommended: currentValue !== UNKNOWN_OPTION ? currentValue : UNKNOWN_OPTION,
+      status: 'missing',
+      hint: missingHint,
+      applyValue: currentValue !== UNKNOWN_OPTION ? currentValue : undefined,
+    };
+  };
+
+  const items: StockRecommendationItem[] = [
+    makeItem('substrate', 'Substrato', substrate, substrateSuggestion, substrateMatch, 'Ainda não há substrato ideal registrado no estoque para esta ficha.', 'Substrato sugerido: {value}, usando primeiro {item}.'),
+    makeItem('drainage', 'Drenagem', drainage, drainageSuggestion, drainageMatch, 'A drenagem ideal ainda não aparece no estoque.', 'Drenagem sugerida: {value}, aproveitando {item}.'),
+    makeItem('filterMaterial', 'Filtragem', filter, filterSuggestion, filterMatch, 'Não encontrei manta, tela ou filtro no estoque agora.', 'Filtragem sugerida: {value}, com {item}.'),
+    makeItem('potSize', 'Vaso', pot, potSuggestion, potMatch, 'O estoque não mostra um vaso adequado no momento.', 'Recipiente sugerido: {value}, usando {item}.')
+  ];
+
+  const patch: Partial<Plant> = {};
+  items.forEach(item => {
+    if (item.status === 'available' && item.applyValue) {
+      patch[item.key] = item.applyValue as any;
+    }
+  });
+
+  const summaryParts = items.map(item => item.hint);
+  if (fertilizerMatch) {
+    summaryParts.push(`Adubação futura: ${fertilizerMatch.name} está disponível para manutenção quando a planta estiver estabelecida.`);
+  }
+
+  return {
+    summary: summaryParts.join(' '),
+    items,
+    patch,
+  };
+};
+
+const buildSmartStockSuggestion = (stock: StockItem[], fields: Partial<Plant> & { species?: string; notes?: string }) => buildStockRecommendationBundle(stock, fields).summary;
+
+
+function StockSuggestionPanel({ summary, items, onApply, disabled, message }: { summary: string; items: StockRecommendationItem[]; onApply: () => void; disabled?: boolean; message?: string | null; }) {
+  const statusStyles = {
+    current: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    available: 'bg-blue-50 text-blue-700 border-blue-200',
+    missing: 'bg-amber-50 text-amber-700 border-amber-200',
+  } as const;
+
+  const statusLabels = {
+    current: 'já atende',
+    available: 'sugerido',
+    missing: 'falta no estoque',
+  } as const;
+
+  return (
+    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <label className="text-xs font-bold text-amber-700 uppercase mb-2 block">Sugestão com base no estoque</label>
+          <p className="text-sm text-amber-950 leading-relaxed">{summary}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={disabled}
+          className={`shrink-0 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${disabled ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-amber-500 text-white hover:bg-amber-600 shadow-lg shadow-amber-500/20'}`}
+        >
+          Aplicar sugestão
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {items.map((item) => (
+          <div key={item.key} className="rounded-2xl border border-amber-200 bg-white/80 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-600">{item.label}</div>
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusStyles[item.status]}`}>
+                {statusLabels[item.status]}
+              </span>
+            </div>
+            <div className="text-sm font-semibold text-slate-900">{item.recommended}</div>
+            <div className="flex flex-wrap gap-2">
+              {item.inventoryItem && (
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-700">
+                  Item: {item.inventoryItem}
+                </span>
+              )}
+              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+                {item.hint}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {message && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+          {message}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [plants, setPlants] = useState<Plant[]>([]);
   const [locations, setLocations] = useState<Location[]>([
-    { id: '1', name: 'Varanda Principal', light: 'Sol Pleno', exposure: 'Norte' },
-    { id: '2', name: 'Sacada Coberta', light: 'Meia Sombra', exposure: 'Leste' },
-    { id: '3', name: 'Prateleira Interna', light: 'Luz Indireta', exposure: 'Interno' },
+    { id: '1', name: 'Varanda Principal', light: 'Sol Pleno', exposure: 'Norte', covered: false, receivesRain: true, sunPeriod: 'Dia inteiro', notes: 'Área aberta principal do jardim.' },
+    { id: '2', name: 'Sacada Coberta', light: 'Meia Sombra', exposure: 'Leste', covered: true, receivesRain: false, sunPeriod: 'Parcial', notes: 'Boa para plantas que não gostam de sol muito forte.' },
+    { id: '3', name: 'Prateleira Interna', light: 'Luz Indireta', exposure: 'Interno', covered: true, receivesRain: false, sunPeriod: 'Não recebe sol direto', notes: 'Ambiente interno iluminado.' },
   ]);
   const [logs, setLogs] = useState<Log[]>([]);
   const [stock, setStock] = useState<StockItem[]>([
-    { id: '1', name: 'Terra Vegetal', quantity: 10, unit: 'kg', minQuantity: 2, category: 'Substratos & Solos' },
-    { id: '2', name: 'Húmus de Minhoca', quantity: 5, unit: 'kg', minQuantity: 1, category: 'Substratos & Solos' },
-    { id: '3', name: 'NPK 10-10-10', quantity: 500, unit: 'g', minQuantity: 100, category: 'Fertilizantes & Adubos' },
-    { id: '4', name: 'Vaso de Barro G', quantity: 3, unit: 'un', minQuantity: 1, category: 'Vasos & Recipientes' },
-    { id: '5', name: 'Tesoura de Poda', quantity: 1, unit: 'un', minQuantity: 1, category: 'Ferramentas' },
+    { id: '1', name: 'Terra Vegetal', quantity: 10, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos' },
+    { id: '2', name: 'Húmus de Minhoca', quantity: 5, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos' },
+    { id: '3', name: 'NPK 10-10-10', quantity: 500, unit: 'g', minQuantity: 0, category: 'Fertilizantes & Adubos' },
+    { id: '4', name: 'Vaso de Barro G', quantity: 3, unit: 'un', minQuantity: 0, category: 'Vasos & Recipientes' },
+    { id: '5', name: 'Tesoura de Poda', quantity: 1, unit: 'un', minQuantity: 0, category: 'Ferramentas' },
   ]);
   const [germinations, setGerminations] = useState<Germination[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -173,6 +494,7 @@ export default function App() {
     gardenAddress: '',
     geminiApiKey: ''
   });
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<string[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [wateringConfirmation, setWateringConfirmation] = useState<{ type: 'frequency' | 'germination', frequency?: string } | null>(null);
   const [wateredToday, setWateredToday] = useState<string[]>([]); // Array of frequency names or 'germination'
@@ -199,6 +521,47 @@ export default function App() {
     setHistory(prev => [newItem, ...prev]);
   };
 
+
+  const normalizeLocation = (location: Partial<Location>): Location => ({
+    id: location.id || Math.random().toString(36).slice(2, 9),
+    name: location.name || 'Novo ambiente',
+    light: location.light || 'Meia Sombra',
+    exposure: location.exposure || 'Interno',
+    covered: location.covered ?? true,
+    receivesRain: location.receivesRain ?? false,
+    sunPeriod: location.sunPeriod || 'Parcial',
+    notes: location.notes || '',
+  });
+
+  const safeJsonParse = <T,>(raw: string | null, fallback: T): T => {
+    if (!raw) return fallback;
+    try {
+      if (raw === 'undefined' || raw === 'null') return fallback;
+      return JSON.parse(raw) as T;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const showToast = (message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const dismissAlert = (alertId: string) => {
+    setDismissedAlertIds(prev => prev.includes(alertId) ? prev : [...prev, alertId]);
+    showToast('Alerta arquivado.');
+  };
+
+  const reactivateAlert = (alertId: string) => {
+    setDismissedAlertIds(prev => prev.filter(id => id !== alertId));
+    showToast('Alerta reativado.');
+  };
+
+  const clearDismissedAlerts = () => {
+    setDismissedAlertIds([]);
+    showToast('Alertas arquivados foram restaurados.');
+  };
 
   // Constants
   const PLANT_CATALOG = [
@@ -293,34 +656,34 @@ export default function App() {
     
     for (const key of possibleKeys) {
       const data = localStorage.getItem(key);
-      if (data) {
+      if (data && data !== 'undefined') {
         savedData = data;
         break;
       }
     }
 
     if (savedData) {
-      try {
-        const parsed = JSON.parse(savedData);
-        // Handle both old and new formats
-        const plantsList = parsed.plants || parsed.plantsData || [];
-        const stockList = parsed.stock || parsed.stockData || [];
-        const logsList = parsed.logs || [];
-        const germinationsList = parsed.germinations || [];
-        const tasksList = parsed.tasks || [];
-        const historyList = parsed.history || [];
-        const locationsList = parsed.locations || [];
+      const parsed: any = safeJsonParse(savedData, {});
+      // Handle both old and new formats
+      const plantsList = parsed.plants || parsed.plantsData || [];
+      const stockList = parsed.stock || parsed.stockData || [];
+      const logsList = parsed.logs || [];
+      const germinationsList = parsed.germinations || [];
+      const tasksList = parsed.tasks || [];
+      const historyList = parsed.history || [];
+      const locationsList = parsed.locations || [];
 
-        if (plantsList.length > 0) setPlants(plantsList);
-        if (logsList.length > 0) setLogs(logsList);
-        if (stockList.length > 0) setStock(stockList.map((item: any) => ({ category: item.category || 'Insumos Gerais', ...item })));
-        if (germinationsList.length > 0) setGerminations(germinationsList);
-        if (tasksList.length > 0) setTasks(tasksList);
-        if (historyList.length > 0) setHistory(historyList);
-        if (locationsList.length > 0) setLocations(locationsList);
-      } catch (e) {
-        console.error("Error parsing recovered data", e);
-      }
+      if (plantsList.length > 0) setPlants(plantsList);
+      if (logsList.length > 0) setLogs(logsList);
+      if (stockList.length > 0) setStock(stockList.map((item: any) => ({
+        category: item.category || 'Insumos Gerais',
+        usageTags: inferStockUsageTags(item),
+        ...item,
+      })));
+      if (germinationsList.length > 0) setGerminations(germinationsList);
+      if (tasksList.length > 0) setTasks(tasksList);
+      if (historyList.length > 0) setHistory(historyList);
+      if (locationsList.length > 0) setLocations(locationsList.map((location: any) => normalizeLocation(location)));
     } else {
       // Default data
       setPlants([
@@ -329,8 +692,8 @@ export default function App() {
         { id: '3', name: 'Babosa', species: 'Aloe vera', locationId: '2', status: 'Recuperação', wateringFrequency: 'Quinzenal' },
       ]);
       setStock([
-        { id: '1', name: 'Terra Vegetal', quantity: 5, unit: 'kg', minQuantity: 2, category: 'Substratos & Solos' },
-        { id: '2', name: 'Húmus de Minhoca', quantity: 1, unit: 'kg', minQuantity: 2, category: 'Substratos & Solos' },
+        { id: '1', name: 'Terra Vegetal', quantity: 5, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato'] },
+        { id: '2', name: 'Húmus de Minhoca', quantity: 1, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato', 'Adubação'] },
       ]);
       setTasks([
         { id: '1', title: 'Adubar Manjericão', date: 'Hoje, 14:00', completed: false, plantId: '1' },
@@ -340,8 +703,8 @@ export default function App() {
 
     const savedSettings = localStorage.getItem('atena_garden_settings');
     const localGeminiKey = getSavedGeminiKey();
-    if (savedSettings) {
-      const parsed = JSON.parse(savedSettings);
+    if (savedSettings && savedSettings !== 'undefined') {
+      const parsed = safeJsonParse<any>(savedSettings, {});
       const mergedSettings = { ...parsed, geminiApiKey: localGeminiKey || parsed.geminiApiKey || '' };
       setSettings(mergedSettings);
       fetchWeather(mergedSettings);
@@ -351,6 +714,16 @@ export default function App() {
       fetchWeather(initialSettings);
     }
   }, []);
+
+  useEffect(() => {
+    const savedDismissed = localStorage.getItem('atena_garden_dismissed_alerts');
+    const parsed = safeJsonParse<string[]>(savedDismissed, []);
+    if (Array.isArray(parsed)) setDismissedAlertIds(parsed);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('atena_garden_dismissed_alerts', JSON.stringify(dismissedAlertIds));
+  }, [dismissedAlertIds]);
 
   useEffect(() => {
     const dataToSave = { plants, logs, stock, germinations, tasks, history, locations };
@@ -529,6 +902,102 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  const handleSaveLocation = (location: Location) => {
+    const normalized = normalizeLocation(location);
+    setLocations(prev => {
+      const exists = prev.some(l => l.id === normalized.id);
+      return exists ? prev.map(l => l.id === normalized.id ? normalized : l) : [...prev, normalized];
+    });
+    addToHistory({
+      type: 'Atualização',
+      title: `Ambiente ${locations.some(l => l.id === normalized.id) ? 'atualizado' : 'criado'}: ${normalized.name}`,
+      details: `${normalized.light} • ${normalized.covered ? 'Coberto' : 'Descoberto'} • ${normalized.sunPeriod || 'Parcial'}`,
+    });
+    showToast(`Ambiente ${normalized.name} salvo com sucesso`);
+  };
+
+  const handleDeleteLocation = (locationId: string) => {
+    const location = locations.find(l => l.id === locationId);
+    if (!location) return;
+    const hasPlants = plants.some(p => p.locationId === locationId);
+    if (hasPlants) {
+      showToast('Mova as plantas deste ambiente antes de excluí-lo.');
+      return;
+    }
+    setLocations(prev => prev.filter(l => l.id !== locationId));
+    addToHistory({
+      type: 'Atualização',
+      title: `Ambiente removido: ${location.name}`,
+      details: 'Ambiente excluído manualmente do jardim.'
+    });
+    showToast(`Ambiente ${location.name} removido`);
+  };
+
+  const handleUpdateGermination = (updated: Germination) => {
+    setGerminations(prev => prev.map(g => g.id === updated.id ? updated : g));
+  };
+
+  const handleDeleteGermination = (germinationId: string) => {
+    const germination = germinations.find(g => g.id === germinationId);
+    if (!germination) return;
+    setGerminations(prev => prev.filter(g => g.id !== germinationId));
+    addToHistory({
+      type: 'Atualização',
+      title: `Germinação removida: ${germination.name}`,
+      details: 'Registro de germinação excluído manualmente.'
+    });
+    showToast(`Germinação de ${germination.name} removida`);
+  };
+
+  const handleTransferGerminationToPlant = (germinationId: string, payload: Partial<Plant> = {}) => {
+    const germination = germinations.find(g => g.id === germinationId);
+    if (!germination) return;
+    if (germination.transferredPlantId) {
+      showToast('Esta germinação já foi transferida para o jardim.');
+      return;
+    }
+
+    const targetLocationId = payload.locationId || locations[0]?.id || '1';
+    const newPlant: Plant = {
+      id: Math.random().toString(36).slice(2, 9),
+      name: payload.name || germination.name,
+      species: payload.species || germination.species || '',
+      locationId: targetLocationId,
+      status: 'Muda',
+      wateringFrequency: payload.wateringFrequency || 'Semanal',
+      notes: [
+        payload.notes,
+        germination.notes,
+        germination.plantingInstructions ? `Plantio: ${germination.plantingInstructions}` : '',
+        germination.germinationTechniques ? `Técnicas de germinação: ${germination.germinationTechniques}` : '',
+        germination.wateringTips ? `Rega: ${germination.wateringTips}` : ''
+      ].filter(Boolean).join('\n\n'),
+      image: payload.image || germination.image,
+      lastWatered: new Date().toISOString(),
+      lastRepotted: '',
+      potSize: payload.potSize || 'Copo/mini vaso',
+      substrateMix: payload.substrateMix || '',
+      drainageLayer: payload.drainageLayer || '',
+      substrate: payload.substrate || '',
+      drainage: payload.drainage || '',
+      filterMaterial: payload.filterMaterial || '',
+      isFavorite: false,
+    };
+
+    setPlants(prev => [newPlant, ...prev]);
+    setGerminations(prev => prev.map(g => g.id === germinationId ? { ...g, status: 'Transferida', transferredPlantId: newPlant.id, transferredAt: new Date().toISOString() } : g));
+    addToHistory({
+      type: 'Atualização',
+      title: `Transferida para o jardim: ${newPlant.name}`,
+      details: `A germinação virou uma planta no ambiente ${locations.find(l => l.id === targetLocationId)?.name || 'Selecionado'}.`,
+      image: newPlant.image,
+      plantId: newPlant.id,
+    });
+    showToast(`${newPlant.name} agora faz parte do jardim`);
+    setActiveTab('plants');
+  };
+
+
   const filteredPlants = useMemo(() => {
     return plants.filter(p => 
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -536,12 +1005,111 @@ export default function App() {
     );
   }, [plants, searchQuery]);
 
+  const allAlerts = useMemo<GardenAlert[]>(() => {
+    const generated: GardenAlert[] = [];
+
+    plants.forEach((plant) => {
+      if (plant.status === 'Problema') {
+        generated.push({
+          id: `plant-problem-${plant.id}`,
+          title: `${plant.name} precisa de atenção`,
+          details: `A planta está marcada como Problema. Revise sintomas, rega, substrato e ambiente.`,
+          severity: 'alta',
+          category: 'Plantas',
+          targetTab: 'plants',
+          createdAt: plant.lastWatered || new Date().toISOString(),
+        });
+      }
+      if (plant.status === 'Recuperação') {
+        generated.push({
+          id: `plant-recovery-${plant.id}`,
+          title: `${plant.name} está em recuperação`,
+          details: `Acompanhe a evolução da planta e confirme se o novo local, luz e rega estão adequados.`,
+          severity: 'media',
+          category: 'Plantas',
+          targetTab: 'plants',
+          createdAt: plant.lastWatered || new Date().toISOString(),
+        });
+      }
+    });
+
+    const firstWaterPlants = plants.filter(p => !p.lastWatered);
+    if (firstWaterPlants.length > 0) {
+      generated.push({
+        id: 'plants-missing-first-water',
+        title: `${firstWaterPlants.length} planta(s) sem rega registrada`,
+        details: `Há plantas cadastradas sem nenhuma rega lançada. Confira a aba Minhas Plantas para atualizar o histórico.`,
+        severity: 'media',
+        category: 'Plantas',
+        targetTab: 'plants',
+      });
+    }
+
+    const ongoingGerminations = germinations.filter(g => g.status === 'Em andamento');
+    ongoingGerminations.forEach((g) => {
+      const elapsedDays = Math.max(0, Math.ceil((Date.now() - new Date(g.startDate).getTime()) / 86400000));
+      if (elapsedDays > g.expectedDays + 2) {
+        generated.push({
+          id: `germination-overdue-${g.id}`,
+          title: `${g.name} está demorando para germinar`,
+          details: `A germinação já está em ${elapsedDays} dias, acima da previsão de ${g.expectedDays}. Revise umidade, luz e técnicas sugeridas.`,
+          severity: 'media',
+          category: 'Germinação',
+          targetTab: 'seeds',
+        });
+      }
+    });
+
+    germinations.filter(g => g.status === 'Sucesso' && !g.transferredPlantId).forEach((g) => {
+      generated.push({
+        id: `germination-transfer-${g.id}`,
+        title: `${g.name} já pode ir para o jardim`,
+        details: `A germinação foi marcada como sucesso e pode ser transferida automaticamente para virar uma planta do jardim.`,
+        severity: 'baixa',
+        category: 'Germinação',
+        targetTab: 'seeds',
+      });
+    });
+
+    if (weather) {
+      if (weather.temp >= 32) {
+        generated.push({
+          id: 'weather-heat',
+          title: 'Calor forte hoje',
+          details: `Temperatura atual em ${weather.temp}°C. Considere revisar umidade e possível rega extra no fim do dia para plantas sensíveis.`,
+          severity: 'media',
+          category: 'Clima',
+          targetTab: 'dashboard',
+        });
+      }
+      const uncoveredPlants = plants.filter(p => {
+        const location = locations.find(l => l.id === p.locationId);
+        return location && !location.covered;
+      }).length;
+      if (weather.rainProb >= 70 && uncoveredPlants > 0) {
+        generated.push({
+          id: 'weather-rain',
+          title: 'Chuva provável para plantas descobertas',
+          details: `A chance de chuva está em ${weather.rainProb}% e você tem ${uncoveredPlants} planta(s) em ambiente descoberto.`,
+          severity: 'media',
+          category: 'Clima',
+          targetTab: 'places',
+        });
+      }
+    }
+
+    return generated;
+  }, [plants, stock, germinations, weather, locations]);
+
+  const activeAlerts = useMemo(() => allAlerts.filter(alert => !dismissedAlertIds.includes(alert.id)), [allAlerts, dismissedAlertIds]);
+  const archivedAlerts = useMemo(() => allAlerts.filter(alert => dismissedAlertIds.includes(alert.id)), [allAlerts, dismissedAlertIds]);
+
   const stats = {
     total: plants.length,
-    alerts: plants.filter(p => p.status === 'Problema' || p.status === 'Recuperação').length,
+    alerts: activeAlerts.length,
     wateringDue: plants.filter(p => !p.lastWatered).length,
     germinating: germinations.filter(g => g.status === 'Em andamento').length,
-    lowStock: stock.filter(s => s.quantity <= s.minQuantity).length
+    stockItems: stock.length
   };
 
   const favoritePlant = useMemo(() => plants.find(p => p.isFavorite), [plants]);
@@ -572,6 +1140,7 @@ export default function App() {
 
         <nav className="flex-1 space-y-1 overflow-y-auto pr-2 custom-scrollbar relative z-10">
           <SidebarLink icon={LayoutDashboard} label="Painel" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+          <SidebarLink icon={AlertCircle} label={`Alertas (${activeAlerts.length})`} active={activeTab === 'alerts'} onClick={() => setActiveTab('alerts')} />
           
           <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Jardim</div>
           <SidebarLink icon={Sprout} label="Minhas Plantas" active={activeTab === 'plants'} onClick={() => setActiveTab('plants')} />
@@ -674,6 +1243,14 @@ export default function App() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
+            <button
+              onClick={() => setActiveTab('alerts')}
+              className="flex items-center gap-2 bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-semibold text-slate-700 hover:border-amber-300 hover:bg-amber-50 transition-colors"
+            >
+              <AlertCircle className="w-5 h-5 text-amber-500" />
+              <span className="hidden sm:inline">Alertas</span>
+              <span className="inline-flex min-w-6 justify-center rounded-full bg-amber-500 px-2 py-0.5 text-xs font-bold text-white">{activeAlerts.length}</span>
+            </button>
             <button 
               onClick={() => setActiveTab('identify')}
               className="hidden md:flex items-center gap-2 bg-emerald-500 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
@@ -698,6 +1275,18 @@ export default function App() {
               setWateringConfirmation={setWateringConfirmation}
               history={history}
               wateredToday={wateredToday}
+              activeAlerts={activeAlerts}
+            />
+          )}
+
+          {activeTab === 'alerts' && (
+            <AlertsView
+              alerts={activeAlerts}
+              archivedAlerts={archivedAlerts}
+              onOpenTab={(tab: string) => setActiveTab(tab)}
+              onDismiss={dismissAlert}
+              onReactivate={reactivateAlert}
+              onRestoreAll={clearDismissedAlerts}
             />
           )}
 
@@ -714,24 +1303,32 @@ export default function App() {
           )}
 
           {activeTab === 'places' && (
-            <PlacesView locations={locations} plants={plants} />
+            <PlacesView 
+              locations={locations} 
+              plants={plants} 
+              onSaveLocation={handleSaveLocation}
+              onDeleteLocation={handleDeleteLocation}
+            />
           )}
 
           {activeTab === 'seeds' && (
             <SeedsView 
               stock={stock}
               germinations={germinations}
+              locations={locations}
               onStartGermination={(g: Germination) => {
                 setGerminations(prev => [g, ...prev]);
-                setToast(`Germinação de "${g.name}" iniciada!`);
-                setTimeout(() => setToast(null), 3000);
+                showToast(`Germinação de "${g.name}" iniciada!`);
               }}
+              onUpdateGermination={handleUpdateGermination}
+              onDeleteGermination={handleDeleteGermination}
+              onTransferToGarden={handleTransferGerminationToPlant}
               addToHistory={addToHistory}
             />
           )}
 
           {activeTab === 'stock' && (
-            <StockView stock={stock} setStock={setStock} />
+            <StockView stock={stock} setStock={setStock} addToHistory={addToHistory} />
           )}
 
           {activeTab === 'logs' && (
@@ -763,6 +1360,7 @@ export default function App() {
                 setTimeout(() => setToast(null), 3000);
               }} 
               locations={locations}
+              stock={stock}
               addToHistory={addToHistory}
             />
           )}
@@ -788,7 +1386,7 @@ export default function App() {
               initial={{ opacity: 0, y: 50 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 50 }}
-              className="fixed bottom-24 md:bottom-10 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl z-[100] font-bold flex items-center gap-2"
+              className="fixed top-4 md:top-auto md:bottom-10 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl z-[260] font-bold flex items-center gap-2 w-[calc(100%-2rem)] max-w-xl justify-center text-center"
             >
               <CheckCircle2 className="w-5 h-5" /> {toast}
             </motion.div>
@@ -801,7 +1399,7 @@ export default function App() {
 
 // --- View Components ---
 
-function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats, filteredPlants, locations, setActiveTab, tasks, setWateringConfirmation, history, wateredToday }: any) {
+function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats, filteredPlants, locations, setActiveTab, tasks, setWateringConfirmation, history, wateredToday, activeAlerts }: any) {
   return (
     <motion.div 
       key="dashboard"
@@ -877,7 +1475,34 @@ function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats,
               <StatRow label="Plantas" value={stats.total} color="bg-blue-500" />
               <StatRow label="Alertas" value={stats.alerts} color="bg-amber-500" />
               <StatRow label="Germinação" value={stats.germinating} color="bg-purple-500" />
-              <StatRow label="Estoque Baixo" value={stats.lowStock} color="bg-red-500" />
+              <StatRow label="Itens no Estoque" value={stats.stockItems} color="bg-emerald-500" />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="font-bold text-slate-900 flex items-center gap-2"><AlertCircle className="w-5 h-5 text-amber-500" /> Alertas do Jardim</h3>
+                <p className="text-sm text-slate-500 mt-1">Veja o que precisa de ação agora e abra a área certa do app.</p>
+              </div>
+              <button onClick={() => setActiveTab('alerts')} className="text-emerald-600 font-semibold text-sm hover:underline">Gerenciar</button>
+            </div>
+            <div className="space-y-3">
+              {activeAlerts.length === 0 ? (
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-700 font-medium">Nenhum alerta ativo no momento.</div>
+              ) : (
+                activeAlerts.slice(0, 3).map((alert: GardenAlert) => (
+                  <button key={alert.id} onClick={() => setActiveTab(alert.targetTab || 'alerts')} className="w-full text-left rounded-2xl border border-slate-200 px-4 py-4 hover:border-emerald-200 hover:bg-emerald-50/50 transition-colors">
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-1 inline-flex h-2.5 w-2.5 rounded-full ${alert.severity === 'alta' ? 'bg-red-500' : alert.severity === 'media' ? 'bg-amber-500' : 'bg-blue-500'}`} />
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-900">{alert.title}</div>
+                        <div className="text-sm text-slate-500 mt-1 line-clamp-2">{alert.details}</div>
+                      </div>
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
           </div>
 
@@ -961,6 +1586,120 @@ function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats,
   );
 }
 
+function AlertsView({ alerts, archivedAlerts, onOpenTab, onDismiss, onReactivate, onRestoreAll }: any) {
+  const [showArchived, setShowArchived] = useState(false);
+
+  const severityLabel = (severity: GardenAlert['severity']) => {
+    if (severity === 'alta') return 'Alta';
+    if (severity === 'media') return 'Média';
+    return 'Baixa';
+  };
+
+  const severityStyles = (severity: GardenAlert['severity']) => {
+    if (severity === 'alta') return 'bg-red-50 text-red-700 border-red-100';
+    if (severity === 'media') return 'bg-amber-50 text-amber-700 border-amber-100';
+    return 'bg-blue-50 text-blue-700 border-blue-100';
+  };
+
+  const AlertCard = ({ alert, archived = false }: { alert: GardenAlert, archived?: boolean }) => (
+    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-2 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${severityStyles(alert.severity)}`}>
+              <AlertCircle className="w-3.5 h-3.5" /> {severityLabel(alert.severity)}
+            </span>
+            <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{alert.category}</span>
+            {archived && <span className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">Arquivado</span>}
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">{alert.title}</h3>
+          <p className="text-slate-600 leading-relaxed">{alert.details}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-3">
+        {alert.targetTab && (
+          <button onClick={() => onOpenTab(alert.targetTab)} className="px-4 py-2 rounded-xl bg-emerald-500 text-white font-semibold hover:bg-emerald-600 transition-colors">
+            Abrir área relacionada
+          </button>
+        )}
+        {!archived ? (
+          <button onClick={() => onDismiss(alert.id)} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200 transition-colors">
+            Arquivar alerta
+          </button>
+        ) : (
+          <button onClick={() => onReactivate(alert.id)} className="px-4 py-2 rounded-xl bg-blue-50 text-blue-700 font-semibold hover:bg-blue-100 transition-colors">
+            Reativar alerta
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <motion.div
+      key="alerts"
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      className="space-y-8"
+    >
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2"><AlertCircle className="text-amber-500" /> Central de Alertas</h2>
+          <p className="text-slate-500 mt-1">Aqui você vê por que cada alerta apareceu e pode abrir a área correta do app ou arquivar o aviso.</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button onClick={() => setShowArchived(prev => !prev)} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200 transition-colors">
+            {showArchived ? 'Ocultar arquivados' : `Ver arquivados (${archivedAlerts.length})`}
+          </button>
+          <button onClick={onRestoreAll} className="px-4 py-2 rounded-xl bg-blue-50 text-blue-700 font-semibold hover:bg-blue-100 transition-colors">
+            Restaurar arquivados
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+          <div className="text-sm text-slate-500">Alertas ativos</div>
+          <div className="text-3xl font-bold text-slate-900 mt-2">{alerts.length}</div>
+        </div>
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+          <div className="text-sm text-slate-500">Alta prioridade</div>
+          <div className="text-3xl font-bold text-red-600 mt-2">{alerts.filter((alert: GardenAlert) => alert.severity === 'alta').length}</div>
+        </div>
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+          <div className="text-sm text-slate-500">Arquivados</div>
+          <div className="text-3xl font-bold text-slate-900 mt-2">{archivedAlerts.length}</div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {alerts.length === 0 ? (
+          <div className="bg-white rounded-3xl border border-emerald-100 p-8 shadow-sm text-center text-emerald-700 font-medium">
+            Nenhum alerta ativo. Seu jardim está em dia agora.
+          </div>
+        ) : (
+          alerts.map((alert: GardenAlert) => <div key={alert.id}><AlertCard alert={alert} /></div>)
+        )}
+      </div>
+
+      {showArchived && (
+        <section className="space-y-4">
+          <div>
+            <h3 className="text-xl font-bold text-slate-900">Alertas arquivados</h3>
+            <p className="text-slate-500 text-sm mt-1">Arquive alertas para limpar a lista. Você pode reativá-los quando quiser.</p>
+          </div>
+          {archivedAlerts.length === 0 ? (
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 text-slate-500">Nenhum alerta arquivado.</div>
+          ) : (
+            archivedAlerts.map((alert: GardenAlert) => <div key={alert.id}><AlertCard alert={alert} archived /></div>)
+          )}
+        </section>
+      )}
+    </motion.div>
+  );
+}
+
 function PlantsView({ filteredPlants, locations, onWater, onUpdate, onRepot, onDelete, onAdd }: any) {
   return (
     <motion.div 
@@ -992,11 +1731,39 @@ function PlantsView({ filteredPlants, locations, onWater, onUpdate, onRepot, onD
   );
 }
 
-function PlacesView({ locations, plants }: { locations: Location[], plants: Plant[] }) {
+function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation }: { locations: Location[], plants: Plant[], onSaveLocation: (location: Location) => void, onDeleteLocation: (id: string) => void }) {
+  const [draft, setDraft] = useState<Location>({
+    id: '',
+    name: '',
+    light: 'Meia Sombra',
+    exposure: 'Interno',
+    covered: true,
+    receivesRain: false,
+    sunPeriod: 'Parcial',
+    notes: ''
+  });
+
   const groupedLocations = locations.map(location => ({
     ...location,
     plants: plants.filter(plant => plant.locationId === location.id),
   }));
+
+  const resetDraft = () => setDraft({
+    id: '',
+    name: '',
+    light: 'Meia Sombra',
+    exposure: 'Interno',
+    covered: true,
+    receivesRain: false,
+    sunPeriod: 'Parcial',
+    notes: ''
+  });
+
+  const saveDraft = () => {
+    if (!draft.name.trim()) return;
+    onSaveLocation({ ...draft, name: draft.name.trim() });
+    resetDraft();
+  };
 
   return (
     <motion.div
@@ -1007,7 +1774,61 @@ function PlacesView({ locations, plants }: { locations: Location[], plants: Plan
     >
       <div>
         <h2 className="text-2xl font-bold text-slate-900">Ambientes do Jardim</h2>
-        <p className="text-slate-500">Veja rapidamente quantas plantas vivem em cada espaço e qual luz cada local recebe.</p>
+        <p className="text-slate-500">Cadastre locais, ajuste cobertura, chuva e exposição solar, e mova suas plantas entre ambientes.</p>
+      </div>
+
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <h3 className="text-lg font-bold text-slate-900">Novo ambiente</h3>
+          {draft.id && (
+            <button onClick={resetDraft} className="text-sm font-bold text-slate-500 hover:text-slate-700">Cancelar edição</button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <input
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            placeholder="Ex: Varanda coberta"
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl"
+          />
+          <select value={draft.light} onChange={(e) => setDraft({ ...draft, light: e.target.value })} className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl">
+            <option>Sol Pleno</option>
+            <option>Sol Parcial</option>
+            <option>Meia Sombra</option>
+            <option>Sombra</option>
+            <option>Luz Indireta</option>
+          </select>
+          <select value={draft.sunPeriod} onChange={(e) => setDraft({ ...draft, sunPeriod: e.target.value })} className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl">
+            <option>Dia inteiro</option>
+            <option>Manhã</option>
+            <option>Tarde</option>
+            <option>Parcial</option>
+            <option>Não recebe sol direto</option>
+          </select>
+          <input
+            value={draft.exposure}
+            onChange={(e) => setDraft({ ...draft, exposure: e.target.value })}
+            placeholder="Exposição / face"
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl"
+          />
+        </div>
+        <textarea
+          value={draft.notes || ''}
+          onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+          placeholder="Anotações do ambiente"
+          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl min-h-[88px]"
+        />
+        <div className="flex flex-wrap gap-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+            <input type="checkbox" checked={!!draft.covered} onChange={(e) => setDraft({ ...draft, covered: e.target.checked })} /> Coberto
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+            <input type="checkbox" checked={!!draft.receivesRain} onChange={(e) => setDraft({ ...draft, receivesRain: e.target.checked })} /> Recebe chuva
+          </label>
+          <button onClick={saveDraft} className="ml-auto bg-emerald-500 text-white px-5 py-2 rounded-2xl font-bold hover:bg-emerald-600 transition-colors">
+            {draft.id ? 'Salvar ambiente' : 'Adicionar ambiente'}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1016,12 +1837,19 @@ function PlacesView({ locations, plants }: { locations: Location[], plants: Plan
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-xl font-bold text-slate-900">{location.name}</h3>
-                <p className="text-sm text-slate-500 mt-1">{location.light} • Exposição {location.exposure}</p>
+                <p className="text-sm text-slate-500 mt-1">{location.light} • {location.sunPeriod || 'Parcial'} • Exposição {location.exposure}</p>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold">
+                  <span className={`px-2 py-1 rounded-full ${location.covered ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>{location.covered ? 'Coberto' : 'Descoberto'}</span>
+                  <span className={`px-2 py-1 rounded-full ${location.receivesRain ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{location.receivesRain ? 'Recebe chuva' : 'Sem chuva direta'}</span>
+                </div>
               </div>
-              <div className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-sm font-bold">
-                {location.plants.length} planta{location.plants.length === 1 ? '' : 's'}
+              <div className="flex gap-2">
+                <button onClick={() => setDraft(location)} className="p-2 rounded-xl bg-slate-100 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"><Edit3 className="w-4 h-4" /></button>
+                <button onClick={() => onDeleteLocation(location.id)} className="p-2 rounded-xl bg-slate-100 text-slate-500 hover:text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /></button>
               </div>
             </div>
+
+            {location.notes && <div className="p-4 rounded-2xl bg-slate-50 text-sm text-slate-600">{location.notes}</div>}
 
             {location.plants.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -1054,7 +1882,7 @@ function PlacesView({ locations, plants }: { locations: Location[], plants: Plan
   );
 }
 
-function SeedsView({ stock, germinations, onStartGermination, addToHistory }: { stock: StockItem[], germinations: Germination[], onStartGermination: (g: Germination) => void, addToHistory: (item: any) => void }) {
+function SeedsView({ stock, germinations, locations, onStartGermination, onUpdateGermination, onDeleteGermination, onTransferToGarden, addToHistory }: { stock: StockItem[], germinations: Germination[], locations: Location[], onStartGermination: (g: Germination) => void, onUpdateGermination: (g: Germination) => void, onDeleteGermination: (id: string) => void, onTransferToGarden: (germinationId: string, payload?: Partial<Plant>) => void, addToHistory: (item: any) => void }) {
   const [view, setView] = useState<'list' | 'identify'>('list');
 
   return (
@@ -1083,7 +1911,15 @@ function SeedsView({ stock, germinations, onStartGermination, addToHistory }: { 
       </div>
 
       {view === 'list' ? (
-        <GerminationView germinations={germinations} onNewPlanting={() => setView('identify')} />
+        <GerminationView 
+          germinations={germinations} 
+          locations={locations}
+          onNewPlanting={() => setView('identify')} 
+          onStartGermination={onStartGermination}
+          onUpdateGermination={onUpdateGermination}
+          onDeleteGermination={onDeleteGermination}
+          onTransferToGarden={onTransferToGarden}
+        />
       ) : (
         <SeedIdentifyView 
           stock={stock} 
@@ -1098,40 +1934,168 @@ function SeedsView({ stock, germinations, onStartGermination, addToHistory }: { 
   );
 }
 
-function GerminationView({ germinations, onNewPlanting }: { germinations: Germination[], onNewPlanting?: () => void }) {
+function GerminationView({ germinations, locations, onNewPlanting, onStartGermination, onUpdateGermination, onDeleteGermination, onTransferToGarden }: { germinations: Germination[], locations: Location[], onNewPlanting?: () => void, onStartGermination: (g: Germination) => void, onUpdateGermination: (g: Germination) => void, onDeleteGermination: (id: string) => void, onTransferToGarden: (germinationId: string, payload?: Partial<Plant>) => void }) {
+  const [manualSeed, setManualSeed] = useState({ name: '', species: '', expectedDays: 7, notes: '' });
+  const [transferingId, setTransferingId] = useState<string | null>(null);
+  const [transferDraft, setTransferDraft] = useState<Partial<Plant>>({
+    locationId: locations[0]?.id || '',
+    potSize: 'Copo/mini vaso',
+    wateringFrequency: 'Semanal',
+    substrate: '',
+    drainage: '',
+    filterMaterial: ''
+  });
+
+  const addManualGermination = () => {
+    if (!manualSeed.name.trim()) return;
+    onStartGermination({
+      id: Math.random().toString(36).slice(2, 9),
+      name: manualSeed.name.trim(),
+      species: manualSeed.species.trim(),
+      startDate: new Date().toISOString(),
+      expectedDays: Number(manualSeed.expectedDays) || 7,
+      status: 'Em andamento',
+      notes: manualSeed.notes,
+      lastWatered: new Date().toISOString(),
+      germinationTechniques: 'Registro manual de germinação.',
+      wateringTips: 'Mantenha o substrato levemente úmido, sem encharcar.'
+    } as Germination);
+    setManualSeed({ name: '', species: '', expectedDays: 7, notes: '' });
+  };
+
+  const startTransfer = (germination: Germination) => {
+    setTransferingId(germination.id);
+    setTransferDraft({
+      name: germination.name,
+      species: germination.species || '',
+      locationId: locations[0]?.id || '',
+      potSize: 'Copo/mini vaso',
+      wateringFrequency: 'Semanal',
+      substrate: '',
+      drainage: '',
+      filterMaterial: '',
+      notes: ''
+    });
+  };
+
+  const saveTransfer = () => {
+    if (!transferingId) return;
+    onTransferToGarden(transferingId, transferDraft);
+    setTransferingId(null);
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-slate-700">Acompanhamento</h3>
-        {onNewPlanting && (
-          <button 
-            onClick={onNewPlanting}
-            className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-colors"
-          >
-            <Plus className="w-4 h-4" /> Novo Plantio
-          </button>
-        )}
+      <div className="grid grid-cols-1 xl:grid-cols-[1.5fr,1fr] gap-6">
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-slate-700">Acompanhamento</h3>
+            {onNewPlanting && (
+              <button 
+                onClick={onNewPlanting}
+                className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-colors"
+              >
+                <Plus className="w-4 h-4" /> Novo por IA
+              </button>
+            )}
+          </div>
+          <p className="text-sm text-slate-500">Gerencie rega, evolução da germinação e transfira automaticamente para o jardim quando a muda estiver pronta.</p>
+        </div>
+
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <h3 className="text-lg font-bold text-slate-700">Adicionar germinação manual</h3>
+          <input value={manualSeed.name} onChange={(e) => setManualSeed({ ...manualSeed, name: e.target.value })} placeholder="Nome da semente" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl" />
+          <div className="grid grid-cols-2 gap-3">
+            <input value={manualSeed.species} onChange={(e) => setManualSeed({ ...manualSeed, species: e.target.value })} placeholder="Espécie" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl" />
+            <input type="number" value={manualSeed.expectedDays} onChange={(e) => setManualSeed({ ...manualSeed, expectedDays: Number(e.target.value) })} placeholder="Dias" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl" />
+          </div>
+          <textarea value={manualSeed.notes} onChange={(e) => setManualSeed({ ...manualSeed, notes: e.target.value })} placeholder="Técnicas, lembretes ou observações" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl min-h-[88px]" />
+          <button onClick={addManualGermination} className="w-full bg-emerald-500 text-white py-3 rounded-2xl font-bold hover:bg-emerald-600 transition-colors">Salvar germinação manual</button>
+        </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {germinations.map((g: any) => (
-          <div key={g.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-            <div className="flex justify-between items-start mb-4">
-              <h3 className="font-bold text-lg">{g.name}</h3>
-              <span className={`px-2 py-1 rounded-lg text-xs font-bold ${g.status === 'Em andamento' ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                {g.status}
-              </span>
-            </div>
-            <div className="space-y-2 text-sm text-slate-600">
-              <div className="flex justify-between"><span>Início:</span> <b>{new Date(g.startDate).toLocaleDateString()}</b></div>
-              <div className="flex justify-between"><span>Expectativa:</span> <b>{g.expectedDays} dias</b></div>
-              {g.hydratedWithWarmWater && (
-                <div className="flex items-center gap-2 mt-3 p-2 bg-amber-50 text-amber-700 rounded-lg text-xs font-bold border border-amber-100">
-                  <Droplets className="w-3 h-3" /> Hidratada com Água Morna
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        {germinations.map((g: any) => {
+          const daysElapsed = Math.max(0, Math.floor((Date.now() - new Date(g.startDate).getTime()) / 86400000));
+          const progress = Math.min(100, Math.round((daysElapsed / Math.max(g.expectedDays, 1)) * 100));
+          const canTransfer = g.status === 'Sucesso' || (g.status === 'Em andamento' && daysElapsed >= Math.max(g.expectedDays - 1, 1));
+
+          return (
+            <div key={g.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex justify-between items-start gap-4">
+                <div>
+                  <h3 className="font-bold text-lg">{g.name}</h3>
+                  <p className="text-sm text-slate-500 italic">{g.species || 'Espécie não informada'}</p>
+                </div>
+                <span className={`px-2 py-1 rounded-lg text-xs font-bold ${g.status === 'Em andamento' ? 'bg-blue-100 text-blue-600' : g.status === 'Sucesso' ? 'bg-emerald-100 text-emerald-600' : g.status === 'Transferida' ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'}`}>
+                  {g.status}
+                </span>
+              </div>
+
+              <div className="space-y-2 text-sm text-slate-600">
+                <div className="flex justify-between"><span>Início:</span> <b>{new Date(g.startDate).toLocaleDateString()}</b></div>
+                <div className="flex justify-between"><span>Expectativa:</span> <b>{g.expectedDays} dias</b></div>
+                <div className="flex justify-between"><span>Passaram:</span> <b>{daysElapsed} dias</b></div>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs text-slate-500 mb-1"><span>Progresso</span><span>{progress}%</span></div>
+                <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${progress}%` }} /></div>
+              </div>
+
+              {g.image && <img src={g.image} alt={g.name} className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
+
+              {g.germinationTechniques && <div className="p-4 rounded-2xl bg-purple-50 text-purple-900 text-sm border border-purple-100"><b>Técnicas de germinação:</b><br />{g.germinationTechniques}</div>}
+              {g.plantingInstructions && <div className="p-4 rounded-2xl bg-slate-50 text-slate-700 text-sm"><b>Como plantar:</b><br />{g.plantingInstructions}</div>}
+              {g.wateringTips && <div className="p-4 rounded-2xl bg-blue-50 text-blue-800 text-sm border border-blue-100"><b>Rega ideal:</b><br />{g.wateringTips}</div>}
+              {g.notes && <div className="p-4 rounded-2xl bg-amber-50 text-amber-900 text-sm border border-amber-100 whitespace-pre-line">{g.notes}</div>}
+              {g.hydratedWithWarmWater && <div className="flex items-center gap-2 text-xs font-bold text-amber-700"><Droplets className="w-3 h-3" /> Hidratação com água morna já realizada</div>}
+              {g.transferredPlantId && <div className="text-xs font-bold text-purple-700">Já transferida para o jardim.</div>}
+
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => onUpdateGermination({ ...g, lastWatered: new Date().toISOString() })} className="px-3 py-2 rounded-xl bg-blue-50 text-blue-700 font-bold text-sm hover:bg-blue-100">Regar</button>
+                <button onClick={() => onUpdateGermination({ ...g, status: 'Sucesso' })} className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 font-bold text-sm hover:bg-emerald-100">Marcar sucesso</button>
+                <button onClick={() => onUpdateGermination({ ...g, status: 'Falha' })} className="px-3 py-2 rounded-xl bg-red-50 text-red-700 font-bold text-sm hover:bg-red-100">Marcar falha</button>
+                <button onClick={() => onDeleteGermination(g.id)} className="px-3 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200">Excluir</button>
+              </div>
+
+              {canTransfer && !g.transferredPlantId && (
+                <button onClick={() => startTransfer(g)} className="w-full px-4 py-3 rounded-2xl bg-purple-600 text-white font-bold hover:bg-purple-700">Transferir automaticamente para o jardim</button>
+              )}
+
+              {transferingId === g.id && (
+                <div className="mt-2 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                  <h4 className="font-bold text-slate-900">Criar planta no jardim</h4>
+                  <input value={transferDraft.name || ''} onChange={(e) => setTransferDraft({ ...transferDraft, name: e.target.value })} placeholder="Nome da muda" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <input value={transferDraft.species || ''} onChange={(e) => setTransferDraft({ ...transferDraft, species: e.target.value })} placeholder="Espécie" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
+                    <select value={transferDraft.locationId || ''} onChange={(e) => setTransferDraft({ ...transferDraft, locationId: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl">
+                      {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input value={transferDraft.potSize || ''} onChange={(e) => setTransferDraft({ ...transferDraft, potSize: e.target.value })} placeholder="Tamanho do vaso" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
+                    <select value={transferDraft.wateringFrequency || 'Semanal'} onChange={(e) => setTransferDraft({ ...transferDraft, wateringFrequency: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl">
+                      <option>Diária</option>
+                      <option>Semanal</option>
+                      <option>Quinzenal</option>
+                      <option>Mensal</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input value={transferDraft.substrate || ''} onChange={(e) => setTransferDraft({ ...transferDraft, substrate: e.target.value })} placeholder="Substrato" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
+                    <input value={transferDraft.drainage || ''} onChange={(e) => setTransferDraft({ ...transferDraft, drainage: e.target.value })} placeholder="Drenagem" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
+                  </div>
+                  <textarea value={transferDraft.notes || ''} onChange={(e) => setTransferDraft({ ...transferDraft, notes: e.target.value })} placeholder="Observações extras da muda" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl min-h-[72px]" />
+                  <div className="flex gap-2">
+                    <button onClick={saveTransfer} className="flex-1 px-4 py-3 rounded-2xl bg-emerald-500 text-white font-bold hover:bg-emerald-600">Criar planta</button>
+                    <button onClick={() => setTransferingId(null)} className="px-4 py-3 rounded-2xl bg-slate-200 text-slate-700 font-bold hover:bg-slate-300">Cancelar</button>
+                  </div>
                 </div>
               )}
             </div>
-          </div>
-        ))}
+          );
+        })}
         {germinations.length === 0 && (
           <div className="col-span-full py-12 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
             <FlaskConical className="w-12 h-12 text-slate-300 mx-auto mb-4" />
@@ -1149,9 +2113,13 @@ function GerminationView({ germinations, onNewPlanting }: { germinations: Germin
   );
 }
 
-function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Dispatch<React.SetStateAction<StockItem[]>> }) {
+function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setStock: React.Dispatch<React.SetStateAction<StockItem[]>>, addToHistory: (item: Omit<HistoryItem, 'id' | 'date'>) => void }) {
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newItem, setNewItem] = useState({ name: '', quantity: 0, unit: 'kg', minQuantity: 1, category: 'Substratos & Solos' });
+  const [showAiForm, setShowAiForm] = useState(false);
+  const [identifying, setIdentifying] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiPreview, setAiPreview] = useState<any>(null);
+  const [newItem, setNewItem] = useState<Partial<StockItem>>({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '' });
 
   const categories = [
     'Substratos & Solos',
@@ -1163,15 +2131,41 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
     'Outros'
   ];
 
+  const units = ['kg', 'g', 'un', 'L', 'mL', '-'];
+
+  const resetNewItem = () => setNewItem({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '' });
+
+  const toggleUsageTag = (tag: string) => {
+    setNewItem(prev => {
+      const current = inferStockUsageTags(prev as StockItem);
+      const next = current.includes(tag) ? current.filter(item => item !== tag) : [...current, tag];
+      return { ...prev, usageTags: next };
+    });
+  };
+
   const handleAddItem = () => {
     if (!newItem.name) return;
     const item: StockItem = {
-      ...newItem,
-      id: Math.random().toString(36).substr(2, 9)
+      id: Math.random().toString(36).substr(2, 9),
+      name: normalizeChoice(newItem.name),
+      quantity: Number(newItem.quantity || 0),
+      unit: normalizeChoice(newItem.unit || 'un'),
+      minQuantity: 0,
+      category: newItem.category || 'Outros',
+      usageTags: inferStockUsageTags(newItem as StockItem),
+      notes: normalizeChoice(newItem.notes),
+      image: newItem.image || undefined,
     };
     setStock(prev => [...prev, item]);
+    addToHistory({
+      type: 'Atualização',
+      title: `Item de estoque cadastrado: ${item.name}`,
+      details: `Categoria: ${item.category}. Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.quantity} ${item.unit}.`
+    });
     setShowAddForm(false);
-    setNewItem({ name: '', quantity: 0, unit: 'kg', minQuantity: 1, category: 'Substratos & Solos' });
+    setAiPreview(null);
+    setShowAiForm(false);
+    resetNewItem();
   };
 
   const deleteItem = (id: string) => {
@@ -1180,6 +2174,99 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
 
   const updateQuantity = (id: string, delta: number) => {
     setStock(prev => prev.map(i => i.id === id ? { ...i, quantity: Math.max(0, i.quantity + delta) } : i));
+  };
+
+  const handleImageSelection = (e: any) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      setNewItem(prev => ({ ...prev, image: result }));
+      identifyStockItem(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const identifyStockItem = async (base64Image: string) => {
+    setIdentifying(true);
+    setAiError(null);
+    setAiPreview(null);
+    try {
+      const ai = getGeminiClient();
+      const model = 'gemini-2.5-flash';
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [
+          { text: `Analise a imagem de um item de jardinagem ou cultivo e identifique o que provavelmente é. Responda em Português do Brasil em JSON.
+
+Escolha a melhor categoria principal entre: ${categories.join(', ')}.
+Escolha uma ou mais categorias de uso no app entre: ${STOCK_USAGE_TAGS.join(', ')}.
+Escolha a melhor unidade entre: ${units.join(', ')}.
+Quando houver dúvida, use '-' em notes curtas ou suggestedUse.
+
+Campos esperados:
+- name: nome provável do item
+- category: categoria principal mais adequada
+- usageTags: lista com uma ou mais categorias de uso no app
+- unit: unidade mais provável de controle
+- notes: resumo curto do que é ou para que serve
+- suggestedUse: como esse item costuma ser usado no jardim
+- confidence: Alta, Média ou Baixa` },
+          { inlineData: { data: base64Image.split(',')[1], mimeType: 'image/jpeg' } }
+        ] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              category: { type: Type.STRING },
+              usageTags: { type: Type.ARRAY, items: { type: Type.STRING } },
+              unit: { type: Type.STRING },
+              notes: { type: Type.STRING },
+              suggestedUse: { type: Type.STRING },
+              confidence: { type: Type.STRING }
+            },
+            required: ['name', 'category', 'usageTags', 'unit', 'notes', 'suggestedUse', 'confidence']
+          }
+        }
+      });
+      const data = JSON.parse(response.text || '{}');
+      const safeCategory = categories.includes(data.category) ? data.category : 'Outros';
+      const safeUnit = units.includes(data.unit) ? data.unit : 'un';
+      const safeUsageTags = normalizeStockUsageTags(data.usageTags).length ? normalizeStockUsageTags(data.usageTags) : inferStockUsageTags({ name: data.name, category: safeCategory, notes: [data.notes, data.suggestedUse].filter(Boolean).join(' ') });
+      const notes = [normalizeChoice(data.notes), normalizeChoice(data.suggestedUse) !== '-' ? `Uso sugerido: ${normalizeChoice(data.suggestedUse)}` : ''].filter(Boolean).join(' • ');
+      const preview = {
+        name: normalizeChoice(data.name),
+        category: safeCategory,
+        usageTags: safeUsageTags,
+        unit: safeUnit,
+        notes,
+        confidence: normalizeChoice(data.confidence)
+      };
+      setAiPreview(preview);
+      setNewItem(prev => ({
+        ...prev,
+        name: preview.name,
+        category: preview.category,
+        unit: preview.unit,
+        usageTags: preview.usageTags,
+        notes: preview.notes,
+        quantity: prev.quantity ?? 0,
+      }));
+      setShowAddForm(true);
+      addToHistory({
+        type: 'Atualização',
+        title: `IA analisou item de estoque: ${preview.name}`,
+        details: `Categoria sugerida: ${preview.category}. Usos no app: ${preview.usageTags?.join(', ') || '-'}. Confiança: ${preview.confidence}.`
+      });
+    } catch (err) {
+      console.error(err);
+      setAiError(getGeminiErrorMessage(err, 'Não consegui identificar esse item de estoque agora. Tente outra foto ou faça o cadastro manual.'));
+    } finally {
+      setIdentifying(false);
+    }
   };
 
   const groupedStock = categories.reduce((acc, cat) => {
@@ -1195,18 +2282,103 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
       animate={{ opacity: 1, y: 0 }}
       className="space-y-8 pb-12"
     >
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Estoque de Insumos</h2>
-          <p className="text-slate-500">Gerencie seus materiais e receba alertas de reposição.</p>
+          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico e use IA para acelerar o cadastro dos itens.</p>
         </div>
-        <button 
-          onClick={() => setShowAddForm(true)}
-          className="bg-emerald-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
-        >
-          <Plus className="w-5 h-5" /> Novo Item
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button 
+            onClick={() => { setShowAiForm(prev => !prev); setAiError(null); }}
+            className="bg-blue-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
+          >
+            <PackageSearch className="w-5 h-5" /> Identificar item por IA
+          </button>
+          <button 
+            onClick={() => { setShowAddForm(true); setShowAiForm(false); }}
+            className="bg-emerald-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
+          >
+            <Plus className="w-5 h-5" /> Novo Item
+          </button>
+        </div>
       </div>
+
+      <AnimatePresence>
+        {showAiForm && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Identificação de item do estoque por IA</h3>
+                <p className="text-slate-500 text-sm mt-1">Tire uma foto do saco, embalagem, vaso, ferramenta ou insumo. A IA tenta reconhecer o item e preencher a ficha para você revisar.</p>
+              </div>
+              {!newItem.image ? (
+                <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-10 text-center space-y-4">
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                    <Camera className="w-8 h-8" />
+                  </div>
+                  <div className="text-slate-500 text-sm">Fotografe o item para a IA sugerir nome, categoria, unidade e uso.</div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-500 px-5 py-3 font-bold text-white hover:bg-blue-600 transition-colors">
+                    <Scan className="w-4 h-4" /> Tirar ou escolher foto
+                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelection} />
+                  </label>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-[260px,1fr] gap-5">
+                  <div className="space-y-4">
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                      <img src={newItem.image} alt="Item do estoque" className="h-64 w-full object-cover" />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="flex-1 cursor-pointer rounded-xl bg-slate-100 px-4 py-3 text-center font-semibold text-slate-700 hover:bg-slate-200 transition-colors">
+                        Trocar foto
+                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelection} />
+                      </label>
+                      <button onClick={() => { setNewItem(prev => ({ ...prev, image: '' })); setAiPreview(null); setAiError(null); }} className="rounded-xl bg-slate-100 px-4 py-3 font-semibold text-slate-700 hover:bg-slate-200 transition-colors">Limpar</button>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    {identifying && (
+                      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-5 text-blue-700 font-medium flex items-center gap-3">
+                        <RefreshCw className="w-5 h-5 animate-spin" /> A IA está analisando o item do estoque...
+                      </div>
+                    )}
+                    {aiPreview && (
+                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Sugestão da IA</div>
+                            <div className="text-xl font-bold text-emerald-950 mt-1">{aiPreview.name}</div>
+                          </div>
+                          <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200">Confiança {aiPreview.confidence}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                          <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-slate-200">Categoria: {aiPreview.category}</span>
+                          <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-slate-200">Unidade: {aiPreview.unit}</span>
+                        </div>
+                        {aiPreview.usageTags?.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {aiPreview.usageTags.map((tag: string) => (
+                              <span key={tag} className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700 border border-blue-200">Uso no app: {tag}</span>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-sm text-emerald-900 leading-relaxed">{aiPreview.notes || '-'}</p>
+                        <div className="text-sm text-emerald-700">A ficha abaixo já foi preenchida com essa sugestão. Revise a quantidade e salve quando quiser.</div>
+                      </div>
+                    )}
+                    {aiError && <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-sm font-medium text-red-600">{aiError}</div>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {showAddForm && (
@@ -1224,7 +2396,7 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
                     type="text" 
                     placeholder="Ex: Terra Vegetal"
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    value={newItem.name}
+                    value={newItem.name || ''}
                     onChange={(e) => setNewItem({...newItem, name: e.target.value})}
                   />
                 </div>
@@ -1232,7 +2404,7 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
                   <label className="text-xs font-bold text-slate-400 uppercase ml-1">Categoria</label>
                   <select 
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    value={newItem.category}
+                    value={newItem.category || 'Substratos & Solos'}
                     onChange={(e) => setNewItem({...newItem, category: e.target.value})}
                   >
                     {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
@@ -1244,25 +2416,54 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
                     <input 
                       type="number" 
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      value={newItem.quantity}
+                      value={newItem.quantity ?? 0}
                       onChange={(e) => setNewItem({...newItem, quantity: Number(e.target.value)})}
                     />
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-400 uppercase ml-1">Unidade</label>
-                    <input 
-                      type="text" 
-                      placeholder="kg, g, un, L"
+                    <select 
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      value={newItem.unit}
+                      value={newItem.unit || 'kg'}
                       onChange={(e) => setNewItem({...newItem, unit: e.target.value})}
-                    />
+                    >
+                      {units.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+                    </select>
                   </div>
+                </div>
+                <div className="md:col-span-2 lg:col-span-3 space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">Observações</label>
+                  <textarea 
+                    rows={3}
+                    placeholder="Para que serve, como você usa ou qualquer observação importante."
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    value={newItem.notes || ''}
+                    onChange={(e) => setNewItem({...newItem, notes: e.target.value})}
+                  />
+                </div>
+                <div className="md:col-span-2 lg:col-span-3 space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">Categorias de uso no app</label>
+                  <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    {STOCK_USAGE_TAGS.map(tag => {
+                      const active = inferStockUsageTags(newItem as StockItem).includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => toggleUsageTag(tag)}
+                          className={`rounded-full px-3 py-2 text-xs font-bold transition-colors border ${active ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-200 hover:text-blue-700'}`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-500">Você pode marcar mais de uma categoria de uso. Isso melhora as sugestões automáticas do app.</p>
                 </div>
               </div>
               <div className="flex justify-end gap-3">
                 <button 
-                  onClick={() => setShowAddForm(false)}
+                  onClick={() => { setShowAddForm(false); setAiPreview(null); if (!showAiForm) resetNewItem(); }}
                   className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-colors"
                 >
                   Cancelar
@@ -1289,10 +2490,28 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {items.map(item => (
                 <div key={item.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow group">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h4 className="font-bold text-slate-900">{item.name}</h4>
-                      <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">{item.category}</p>
+                  <div className="flex justify-between items-start mb-4 gap-3">
+                    <div className="flex items-start gap-3 min-w-0">
+                      {item.image ? (
+                        <div className="w-14 h-14 rounded-2xl overflow-hidden border border-slate-200 shrink-0">
+                          <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                        </div>
+                      ) : (
+                        <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 shrink-0 flex items-center justify-center text-slate-400">
+                          <Package className="w-6 h-6" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-slate-900 truncate">{item.name}</h4>
+                        <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">{item.category}</p>
+                        {inferStockUsageTags(item).length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {inferStockUsageTags(item).map(tag => (
+                              <span key={tag} className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 border border-blue-100">{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <button 
                       onClick={() => deleteItem(item.id)}
@@ -1302,13 +2521,13 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
                     </button>
                   </div>
                   
-                  <div className="flex items-end justify-between">
+                  <div className="flex items-end justify-between gap-4">
                     <div>
                       <div className="text-2xl font-black text-slate-900">
                         {item.quantity} <span className="text-sm font-bold text-slate-400">{item.unit}</span>
                       </div>
-                      <div className={`text-[10px] font-bold uppercase mt-1 ${item.quantity <= item.minQuantity ? 'text-red-500' : 'text-emerald-500'}`}>
-                        {item.quantity <= item.minQuantity ? 'Reposição Necessária' : 'Estoque OK'}
+                      <div className="text-[10px] font-bold uppercase mt-1 text-emerald-500">
+                        Disponível para uso
                       </div>
                     </div>
                     <div className="flex gap-1">
@@ -1327,9 +2546,9 @@ function StockView({ stock, setStock }: { stock: StockItem[], setStock: React.Di
                     </div>
                   </div>
                   
-                  {item.quantity <= item.minQuantity && (
-                    <div className="mt-4 p-2 bg-red-50 rounded-xl border border-red-100 flex items-center gap-2 text-red-600 text-[10px] font-bold">
-                      <AlertCircle className="w-3 h-3" /> Nível crítico (Mín: {item.minQuantity}{item.unit})
+                  {item.notes && item.notes !== '-' && (
+                    <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-600">
+                      {item.notes}
                     </div>
                   )}
                 </div>
@@ -1868,7 +3087,7 @@ function DiagnoseView({ addToHistory, setToast }: any) {
   );
 }
 
-function IdentifyPlantView({ addPlant, locations, addToHistory }: any) {
+function IdentifyPlantView({ addPlant, locations, stock, addToHistory }: any) {
   const [mode, setMode] = useState<'ai' | 'manual'>('ai');
   const [image, setImage] = useState<string | null>(null);
   const [identifying, setIdentifying] = useState(false);
@@ -1876,30 +3095,72 @@ function IdentifyPlantView({ addPlant, locations, addToHistory }: any) {
   const [error, setError] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState(locations[0]?.id || '');
   const [confirmed, setConfirmed] = useState(false);
+  const [stockMessage, setStockMessage] = useState<string | null>(null);
   const [manualPlant, setManualPlant] = useState<Partial<Plant>>({
     name: '',
-    species: '',
+    species: UNKNOWN_OPTION,
     locationId: locations[0]?.id || '',
     status: 'Saudável',
     wateringFrequency: 'Semanal',
-    notes: '',
-    potSize: '',
-    substrate: '',
-    drainage: '',
-    filterMaterial: '',
+    notes: UNKNOWN_OPTION,
+    potSize: UNKNOWN_OPTION,
+    substrate: UNKNOWN_OPTION,
+    drainage: UNKNOWN_OPTION,
+    filterMaterial: UNKNOWN_OPTION,
+    substrateMix: UNKNOWN_OPTION,
+    drainageLayer: UNKNOWN_OPTION,
   });
 
-  const substrateOptions = ['Terra vegetal', 'Terra + húmus', 'Substrato para folhagens', 'Substrato para suculentas', 'Terra + areia', 'Casca de pinus + perlita'];
-  const drainageOptions = ['Sem drenagem extra', 'Argila expandida', 'Brita', 'Areia grossa', 'Carvão vegetal'];
-  const filterOptions = ['Sem manta', 'Manta bidim', 'Tela plástica', 'Filtro de café'];
-  const potOptions = ['Copo/mini vaso', 'Pequeno', 'Médio', 'Grande', 'Jardineira'];
+  const matchSelectOption = (value: string | undefined, options: string[]) => {
+    const normalized = normalizeChoice(value);
+    return options.includes(normalized) ? normalized : UNKNOWN_OPTION;
+  };
+
+  const patchPlantData = (partial: any) => {
+    setPlantData((prev: any) => ({ ...(prev || {}), ...partial }));
+  };
+
+  const aiStockBundle = useMemo(() => buildStockRecommendationBundle(stock, plantData || {}), [stock, plantData]);
+  const aiStockSuggestion = useMemo(() => {
+    if (!plantData) return '';
+    return [plantData.stockSuggestions && plantData.stockSuggestions !== UNKNOWN_OPTION ? plantData.stockSuggestions : '', aiStockBundle.summary].filter(Boolean).join(' ');
+  }, [plantData, aiStockBundle]);
+
+  const manualStockBundle = useMemo(() => buildStockRecommendationBundle(stock, manualPlant), [stock, manualPlant]);
+  const manualStockSuggestion = manualStockBundle.summary;
+
+  const applyAiStockSuggestion = () => {
+    if (!plantData) return;
+    const patch = aiStockBundle.patch;
+    if (!Object.keys(patch).length) {
+      setStockMessage('A ficha já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.');
+      return;
+    }
+    patchPlantData(patch);
+    setStockMessage('Sugestões do estoque aplicadas ao cadastro por IA.');
+  };
+
+  const applyManualStockSuggestion = () => {
+    const patch = manualStockBundle.patch;
+    if (!Object.keys(patch).length) {
+      setStockMessage('A ficha manual já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.');
+      return;
+    }
+    setManualPlant(prev => ({ ...prev, ...patch }));
+    setStockMessage('Sugestões do estoque aplicadas aos campos técnicos em aberto.');
+  };
 
   const resetAiState = () => {
     setImage(null);
     setPlantData(null);
     setConfirmed(false);
     setError(null);
+    setStockMessage(null);
   };
+
+  useEffect(() => {
+    setStockMessage(null);
+  }, [mode]);
 
   const handleCapture = (e: any) => {
     const file = e.target.files?.[0];
@@ -1920,8 +3181,26 @@ function IdentifyPlantView({ addPlant, locations, addToHistory }: any) {
     try {
       const ai = getGeminiClient();
       const model = 'gemini-2.5-flash';
+      const stockContext = buildStockContext(stock);
 
-      const prompt = 'Identifique esta planta. Retorne o nome comum, nome científico (espécie), frequência de rega recomendada (Diária, Semanal, Quinzenal ou Mensal), e uma breve nota de cuidado. Responda em Português do Brasil em formato JSON.';
+      const prompt = `Identifique esta planta e devolva a ficha de cadastro completa em JSON, em Português do Brasil.
+
+Escolha a melhor opção possível para todos os campos abaixo, priorizando materiais que já existem no estoque.
+Quando realmente não for possível inferir algo pela foto, use exatamente "-".
+
+Opções aceitas:
+- status: ${PLANT_STATUS_OPTIONS.join(', ')}
+- wateringFrequency: ${WATERING_OPTIONS.join(', ')}
+- potSize: ${POT_OPTIONS.join(', ')}
+- substrate: ${SUBSTRATE_OPTIONS.join(', ')}
+- drainage: ${DRAINAGE_OPTIONS.join(', ')}
+- filterMaterial: ${FILTER_OPTIONS.join(', ')}
+
+Estoque atual: ${stockContext}.
+
+Campos livres (podem receber "-" se não der para inferir): species, notes, substrateMix, drainageLayer.
+
+No campo stockSuggestions, explique objetivamente por que a escolha combina com o estoque disponível e qual item usar primeiro.`;
 
       const response = await ai.models.generateContent({
         model,
@@ -1939,17 +3218,38 @@ function IdentifyPlantView({ addPlant, locations, addToHistory }: any) {
             type: Type.OBJECT,
             properties: {
               name: { type: Type.STRING, description: 'Nome comum da planta' },
-              species: { type: Type.STRING, description: 'Nome científico' },
+              species: { type: Type.STRING, description: 'Nome científico ou -' },
+              status: { type: Type.STRING, description: 'Status inicial da planta' },
               wateringFrequency: { type: Type.STRING, description: 'Frequência de rega (Diária, Semanal, Quinzenal ou Mensal)' },
-              notes: { type: Type.STRING, description: 'Dica de cuidado' }
+              notes: { type: Type.STRING, description: 'Dica de cuidado ou -' },
+              potSize: { type: Type.STRING, description: 'Tamanho de vaso sugerido' },
+              substrate: { type: Type.STRING, description: 'Substrato principal sugerido' },
+              substrateMix: { type: Type.STRING, description: 'Mistura complementar ou -' },
+              drainage: { type: Type.STRING, description: 'Material principal de drenagem' },
+              drainageLayer: { type: Type.STRING, description: 'Detalhe da camada de drenagem ou -' },
+              filterMaterial: { type: Type.STRING, description: 'Material de filtragem sugerido' },
+              stockSuggestions: { type: Type.STRING, description: 'Resumo do melhor uso do estoque para esta planta' }
             },
-            required: ['name', 'species', 'wateringFrequency', 'notes']
+            required: ['name', 'species', 'status', 'wateringFrequency', 'notes', 'potSize', 'substrate', 'substrateMix', 'drainage', 'drainageLayer', 'filterMaterial', 'stockSuggestions']
           }
         }
       });
 
       const data = JSON.parse(response.text || '{}');
-      setPlantData(data);
+      setPlantData({
+        name: normalizeChoice(data.name),
+        species: normalizeChoice(data.species),
+        status: (PLANT_STATUS_OPTIONS.includes(data.status) ? data.status : 'Saudável') as Plant['status'],
+        wateringFrequency: WATERING_OPTIONS.includes(data.wateringFrequency) ? data.wateringFrequency : 'Semanal',
+        notes: normalizeChoice(data.notes),
+        potSize: matchSelectOption(data.potSize, POT_OPTIONS),
+        substrate: matchSelectOption(data.substrate, SUBSTRATE_OPTIONS),
+        substrateMix: normalizeChoice(data.substrateMix),
+        drainage: matchSelectOption(data.drainage, DRAINAGE_OPTIONS),
+        drainageLayer: normalizeChoice(data.drainageLayer),
+        filterMaterial: matchSelectOption(data.filterMaterial, FILTER_OPTIONS),
+        stockSuggestions: normalizeChoice(data.stockSuggestions),
+      });
     } catch (err: any) {
       console.error(err);
       setError(getGeminiErrorMessage(err, 'Erro ao identificar a planta. Tente uma foto mais clara.'));
@@ -1963,30 +3263,32 @@ function IdentifyPlantView({ addPlant, locations, addToHistory }: any) {
 
     const newPlant: Plant = {
       id: Math.random().toString(36).substr(2, 9),
-      name: plantData.name,
-      species: plantData.species,
+      name: normalizeChoice(plantData.name),
+      species: normalizeChoice(plantData.species),
       locationId: selectedLocation,
-      status: 'Saudável',
-      wateringFrequency: plantData.wateringFrequency,
-      notes: plantData.notes,
+      status: (plantData.status || 'Saudável') as Plant['status'],
+      wateringFrequency: plantData.wateringFrequency || 'Semanal',
+      notes: [normalizeChoice(plantData.notes), aiStockSuggestion].filter(Boolean).join('\n\n'),
       image: image || undefined,
       lastWatered: new Date().toISOString(),
       lastRepotted: '',
-      potSize: '',
-      substrateMix: '',
-      drainageLayer: '',
-      substrate: '',
-      drainage: '',
-      filterMaterial: '',
+      potSize: normalizeChoice(plantData.potSize),
+      substrateMix: normalizeChoice(plantData.substrateMix),
+      drainageLayer: normalizeChoice(plantData.drainageLayer),
+      substrate: normalizeChoice(plantData.substrate),
+      drainage: normalizeChoice(plantData.drainage),
+      filterMaterial: normalizeChoice(plantData.filterMaterial),
       isFavorite: false
     };
 
     addPlant(newPlant);
     addToHistory({
       type: 'Identificação',
-      title: plantData.name,
-      details: `Espécie: ${plantData.species}
-Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
+      title: newPlant.name,
+      details: `Espécie: ${newPlant.species}
+Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}
+Substrato: ${newPlant.substrateMix !== UNKNOWN_OPTION ? newPlant.substrateMix : newPlant.substrate}
+Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer : newPlant.drainage}`,
       image: image || undefined
     });
     setConfirmed(true);
@@ -2001,20 +3303,20 @@ Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
     const newPlant: Plant = {
       id: Math.random().toString(36).substr(2, 9),
       name: manualPlant.name.trim(),
-      species: manualPlant.species?.trim() || '',
+      species: normalizeChoice(manualPlant.species),
       locationId: manualPlant.locationId || locations[0]?.id || '1',
       status: (manualPlant.status as Plant['status']) || 'Saudável',
       wateringFrequency: manualPlant.wateringFrequency || 'Semanal',
-      notes: manualPlant.notes || '',
+      notes: [normalizeChoice(manualPlant.notes), manualStockSuggestion].filter(Boolean).join('\n\n'),
       image: manualPlant.image,
       lastWatered: manualPlant.lastWatered || '',
       lastRepotted: manualPlant.lastRepotted || '',
-      potSize: manualPlant.potSize || '',
-      substrate: manualPlant.substrate || '',
-      drainage: manualPlant.drainage || '',
-      filterMaterial: manualPlant.filterMaterial || '',
-      substrateMix: manualPlant.substrateMix || '',
-      drainageLayer: manualPlant.drainageLayer || '',
+      potSize: normalizeChoice(manualPlant.potSize),
+      substrate: normalizeChoice(manualPlant.substrate),
+      drainage: normalizeChoice(manualPlant.drainage),
+      filterMaterial: normalizeChoice(manualPlant.filterMaterial),
+      substrateMix: normalizeChoice(manualPlant.substrateMix),
+      drainageLayer: normalizeChoice(manualPlant.drainageLayer),
       isFavorite: false,
     };
 
@@ -2073,80 +3375,97 @@ Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
                 {identifying && (
                   <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex flex-col items-center justify-center text-white gap-3">
                     <RefreshCw className="w-8 h-8 animate-spin" />
-                    <span className="font-bold">Identificando espécie...</span>
+                    <span className="font-bold">Identificando espécie e completando ficha...</span>
                   </div>
                 )}
               </div>
 
               {plantData && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="space-y-6"
-                >
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                    A IA tentou preencher toda a ficha. Quando não souber algo, deixe <b>-</b> ou ajuste manualmente antes de salvar.
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                       <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Nome Identificado</label>
-                      <input
-                        type="text"
-                        value={plantData.name}
-                        onChange={(e) => setPlantData({ ...plantData, name: e.target.value })}
-                        className="w-full bg-transparent font-bold text-slate-900 focus:outline-none"
-                      />
+                      <input type="text" value={plantData.name} onChange={(e) => patchPlantData({ name: e.target.value })} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none" />
                     </div>
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                       <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Espécie</label>
-                      <input
-                        type="text"
-                        value={plantData.species}
-                        onChange={(e) => setPlantData({ ...plantData, species: e.target.value })}
-                        className="w-full bg-transparent font-medium text-slate-600 italic focus:outline-none"
-                      />
+                      <input type="text" value={plantData.species} onChange={(e) => patchPlantData({ species: e.target.value })} className="w-full bg-transparent font-medium text-slate-600 italic focus:outline-none" />
                     </div>
                   </div>
 
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Onde ela vai ficar?</label>
-                    <select
-                      value={selectedLocation}
-                      onChange={(e) => setSelectedLocation(e.target.value)}
-                      className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none"
-                    >
-                      {locations.map((l: any) => (
-                        <option key={l.id} value={l.id}>{l.name}</option>
-                      ))}
-                    </select>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Onde ela vai ficar?</label>
+                      <select value={selectedLocation} onChange={(e) => setSelectedLocation(e.target.value)} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none">
+                        {locations.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Status</label>
+                      <select value={plantData.status} onChange={(e) => patchPlantData({ status: e.target.value })} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none">
+                        {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </div>
+                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
+                      <label className="text-xs font-bold text-emerald-600 uppercase mb-1 block">Frequência de Rega</label>
+                      <select value={plantData.wateringFrequency} onChange={(e) => patchPlantData({ wateringFrequency: e.target.value })} className="w-full bg-transparent font-bold text-emerald-900 focus:outline-none appearance-none">
+                        {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </div>
                   </div>
 
-                  <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                    <label className="text-xs font-bold text-emerald-600 uppercase mb-1 block">Frequência de Rega</label>
-                    <select
-                      value={plantData.wateringFrequency}
-                      onChange={(e) => setPlantData({ ...plantData, wateringFrequency: e.target.value })}
-                      className="w-full bg-transparent font-bold text-emerald-900 focus:outline-none appearance-none"
-                    >
-                      <option value="Diária">Diária</option>
-                      <option value="Semanal">Semanal</option>
-                      <option value="Quinzenal">Quinzenal</option>
-                      <option value="Mensal">Mensal</option>
-                    </select>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <label className="text-xs font-bold text-slate-400 uppercase">Tamanho do vaso</label>
+                      <select value={normalizeChoice(plantData.potSize)} onChange={(e) => patchPlantData({ potSize: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
+                        {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <label className="text-xs font-bold text-slate-400 uppercase">Material de filtragem</label>
+                      <select value={normalizeChoice(plantData.filterMaterial)} onChange={(e) => patchPlantData({ filterMaterial: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
+                        {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <label className="text-xs font-bold text-slate-400 uppercase">Substrato principal</label>
+                      <select value={normalizeChoice(plantData.substrate)} onChange={(e) => patchPlantData({ substrate: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
+                        {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                      <input type="text" value={normalizeChoice(plantData.substrateMix)} onChange={(e) => patchPlantData({ substrateMix: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da mistura ou -" />
+                    </div>
+                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <label className="text-xs font-bold text-slate-400 uppercase">Drenagem</label>
+                      <select value={normalizeChoice(plantData.drainage)} onChange={(e) => patchPlantData({ drainage: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
+                        {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                      <input type="text" value={normalizeChoice(plantData.drainageLayer)} onChange={(e) => patchPlantData({ drainageLayer: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada ou -" />
+                    </div>
                   </div>
 
                   <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
                     <label className="text-xs font-bold text-blue-600 uppercase mb-1 block">Dica de Cuidado</label>
-                    <textarea
-                      value={plantData.notes}
-                      onChange={(e) => setPlantData({ ...plantData, notes: e.target.value })}
-                      className="w-full bg-transparent text-blue-900 focus:outline-none resize-none h-20"
-                    />
+                    <textarea value={plantData.notes} onChange={(e) => patchPlantData({ notes: e.target.value })} className="w-full bg-transparent text-blue-900 focus:outline-none resize-none h-20" />
                   </div>
+
+                  <StockSuggestionPanel
+                    summary={aiStockSuggestion}
+                    items={aiStockBundle.items}
+                    onApply={applyAiStockSuggestion}
+                    disabled={!Object.keys(aiStockBundle.patch).length}
+                    message={stockMessage}
+                  />
 
                   <div className="flex gap-3 pt-4">
                     {!confirmed ? (
-                      <button
-                        onClick={handleSave}
-                        className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
-                      >
+                      <button onClick={handleSave} className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2">
                         <CheckCircle2 className="w-5 h-5" /> Confirmar e Salvar
                       </button>
                     ) : (
@@ -2154,10 +3473,7 @@ Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
                         <CheckCircle2 className="w-5 h-5" /> Salvo no Jardim
                       </div>
                     )}
-                    <button
-                      onClick={resetAiState}
-                      className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
-                    >
+                    <button onClick={resetAiState} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors">
                       Novo Scan
                     </button>
                   </div>
@@ -2175,66 +3491,38 @@ Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
         </div>
       ) : (
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Use <b>-</b> quando não souber ou não quiser preencher um campo. O app vai sugerir a melhor combinação possível com base no estoque.
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Nome da planta</label>
-              <input
-                type="text"
-                value={manualPlant.name || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, name: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-                placeholder="Ex: Babosa"
-              />
+              <input type="text" value={manualPlant.name || ''} onChange={(e) => setManualPlant({ ...manualPlant, name: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Babosa" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Nome científico</label>
-              <input
-                type="text"
-                value={manualPlant.species || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, species: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-                placeholder="Ex: Aloe vera"
-              />
+              <input type="text" value={manualPlant.species || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, species: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Aloe vera ou -" />
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Ambiente</label>
-              <select
-                value={manualPlant.locationId || locations[0]?.id || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, locationId: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                {locations.map((location: any) => (
-                  <option key={location.id} value={location.id}>{location.name}</option>
-                ))}
+              <select value={manualPlant.locationId || locations[0]?.id || ''} onChange={(e) => setManualPlant({ ...manualPlant, locationId: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {locations.map((location: any) => <option key={location.id} value={location.id}>{location.name}</option>)}
               </select>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Status</label>
-              <select
-                value={manualPlant.status || 'Saudável'}
-                onChange={(e) => setManualPlant({ ...manualPlant, status: e.target.value as Plant['status'] })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                <option>Saudável</option>
-                <option>Recuperação</option>
-                <option>Problema</option>
-                <option>Muda</option>
+              <select value={manualPlant.status || 'Saudável'} onChange={(e) => setManualPlant({ ...manualPlant, status: e.target.value as Plant['status'] })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Frequência de rega</label>
-              <select
-                value={manualPlant.wateringFrequency || 'Semanal'}
-                onChange={(e) => setManualPlant({ ...manualPlant, wateringFrequency: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                <option>Diária</option>
-                <option>Semanal</option>
-                <option>Quinzenal</option>
-                <option>Mensal</option>
+              <select value={manualPlant.wateringFrequency || 'Semanal'} onChange={(e) => setManualPlant({ ...manualPlant, wateringFrequency: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </div>
           </div>
@@ -2242,28 +3530,14 @@ Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Tamanho do vaso</label>
-              <select
-                value={manualPlant.potSize || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, potSize: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                <option value="">Selecione</option>
-                {potOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+              <select value={normalizeChoice(manualPlant.potSize)} onChange={(e) => setManualPlant({ ...manualPlant, potSize: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Material de filtragem</label>
-              <select
-                value={manualPlant.filterMaterial || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, filterMaterial: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                <option value="">Selecione</option>
-                {filterOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+              <select value={normalizeChoice(manualPlant.filterMaterial)} onChange={(e) => setManualPlant({ ...manualPlant, filterMaterial: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </div>
           </div>
@@ -2271,67 +3545,41 @@ Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}`,
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Substrato principal</label>
-              <select
-                value={manualPlant.substrate || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, substrate: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                <option value="">Selecione</option>
-                {substrateOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+              <select value={normalizeChoice(manualPlant.substrate)} onChange={(e) => setManualPlant({ ...manualPlant, substrate: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
-              <input
-                type="text"
-                value={manualPlant.substrateMix || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, substrateMix: e.target.value, substrate: manualPlant.substrate || 'Personalizado' })}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl"
-                placeholder="Detalhes ou mistura personalizada"
-              />
+              <input type="text" value={manualPlant.substrateMix || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, substrateMix: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes ou mistura personalizada / -" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700">Drenagem</label>
-              <select
-                value={manualPlant.drainage || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, drainage: e.target.value })}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl"
-              >
-                <option value="">Selecione</option>
-                {drainageOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+              <select value={normalizeChoice(manualPlant.drainage)} onChange={(e) => setManualPlant({ ...manualPlant, drainage: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
-              <input
-                type="text"
-                value={manualPlant.drainageLayer || ''}
-                onChange={(e) => setManualPlant({ ...manualPlant, drainageLayer: e.target.value, drainage: manualPlant.drainage || 'Personalizada' })}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl"
-                placeholder="Detalhes da camada de drenagem"
-              />
+              <input type="text" value={manualPlant.drainageLayer || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, drainageLayer: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada / -" />
             </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-sm font-semibold text-slate-700">Observações</label>
-            <textarea
-              value={manualPlant.notes || ''}
-              onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })}
-              className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none"
-              placeholder="Cuidados, histórico, origem da muda..."
-            />
+            <textarea value={manualPlant.notes || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })} className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none" placeholder="Cuidados, histórico, origem da muda ou -" />
           </div>
 
+          <StockSuggestionPanel
+            summary={manualStockSuggestion}
+            items={manualStockBundle.items}
+            onApply={applyManualStockSuggestion}
+            disabled={!Object.keys(manualStockBundle.patch).length}
+            message={stockMessage}
+          />
+
           <div className="flex flex-col sm:flex-row gap-3 pt-2">
-            <button
-              onClick={handleManualSave}
-              className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
-            >
+            <button onClick={handleManualSave} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20">
               Salvar planta manualmente
             </button>
             <button
-              onClick={() => setManualPlant({
-                name: '', species: '', locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: '', potSize: '', substrate: '', drainage: '', filterMaterial: ''
-              })}
+              onClick={() => { setManualPlant({
+                name: '', species: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION
+              }); setStockMessage(null); }}
               className="sm:w-48 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
             >
               Limpar
@@ -2797,7 +4045,7 @@ function SpecialistTips({ plants, locations, weather, forecast }: any) {
   );
 }
 
-function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { plant: Plant, location?: string, onWater?: (id: string) => void, onUpdate?: (p: Plant) => void, onRepot?: (id: string, details: any) => void, onDelete?: (id: string) => void, key?: any }) {
+function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot, onDelete }: { plant: Plant, location?: string, locations?: Location[], onWater?: (id: string) => void, onUpdate?: (p: Plant) => void, onRepot?: (id: string, details: any) => void, onDelete?: (id: string) => void, key?: any }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(plant);
 
@@ -2805,9 +4053,6 @@ function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { 
     setEditData(plant);
   }, [plant]);
 
-  const substrateOptions = ['Terra vegetal', 'Terra + húmus', 'Substrato para folhagens', 'Substrato para suculentas', 'Terra + areia', 'Casca de pinus + perlita'];
-  const drainageOptions = ['Sem drenagem extra', 'Argila expandida', 'Brita', 'Areia grossa', 'Carvão vegetal'];
-  const filterOptions = ['Sem manta', 'Manta bidim', 'Tela plástica', 'Filtro de café'];
 
   const handleSave = () => {
     if (onUpdate) onUpdate(editData);
@@ -2941,10 +4186,7 @@ function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { 
                   onChange={e => setEditData({ ...editData, status: e.target.value as Plant['status'] })}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
                 >
-                  <option>Saudável</option>
-                  <option>Recuperação</option>
-                  <option>Problema</option>
-                  <option>Muda</option>
+                  {PLANT_STATUS_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
               </div>
               <div className="space-y-1">
@@ -2954,12 +4196,20 @@ function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { 
                   onChange={e => setEditData({ ...editData, wateringFrequency: e.target.value })}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
                 >
-                  <option>Diária</option>
-                  <option>Semanal</option>
-                  <option>Quinzenal</option>
-                  <option>Mensal</option>
+                  {WATERING_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Ambiente</label>
+              <select
+                value={editData.locationId}
+                onChange={e => setEditData({ ...editData, locationId: e.target.value })}
+                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+              >
+                {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
             </div>
 
             <div className="grid grid-cols-2 gap-2">
@@ -2970,18 +4220,17 @@ function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { 
                   value={editData.potSize || ''}
                   onChange={e => setEditData({ ...editData, potSize: e.target.value })}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
-                  placeholder="Ex: Médio"
+                  placeholder="Ex: Médio ou -"
                 />
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-400">Filtragem</label>
                 <select
-                  value={editData.filterMaterial || ''}
+                  value={normalizeChoice(editData.filterMaterial)}
                   onChange={e => setEditData({ ...editData, filterMaterial: e.target.value })}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
                 >
-                  <option value="">Selecione</option>
-                  {filterOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                  {FILTER_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
               </div>
             </div>
@@ -2990,12 +4239,11 @@ function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { 
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-400">Substrato</label>
                 <select
-                  value={editData.substrate || ''}
+                  value={normalizeChoice(editData.substrate)}
                   onChange={e => setEditData({ ...editData, substrate: e.target.value })}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
                 >
-                  <option value="">Selecione</option>
-                  {substrateOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                  {SUBSTRATE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
                 <input
                   type="text"
@@ -3008,12 +4256,11 @@ function PlantCard({ plant, location, onWater, onUpdate, onRepot, onDelete }: { 
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-400">Drenagem</label>
                 <select
-                  value={editData.drainage || ''}
+                  value={normalizeChoice(editData.drainage)}
                   onChange={e => setEditData({ ...editData, drainage: e.target.value })}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
                 >
-                  <option value="">Selecione</option>
-                  {drainageOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                  {DRAINAGE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
                 <input
                   type="text"
@@ -3140,7 +4387,8 @@ function SeedIdentifyView({ stock, onStartGermination, addToHistory }: { stock: 
       const model = "gemini-2.5-flash";
       
       const stockList = stock.map(s => `${s.name} (${s.quantity} ${s.unit})`).join(", ");
-      const prompt = `Identifique a semente nesta embalagem. Forneça instruções detalhadas de plantio (profundidade, espaçamento, luz, rega). 
+      const prompt = `Identifique a semente nesta embalagem. Forneça instruções detalhadas de plantio (profundidade, espaçamento, luz e rega), além de técnicas práticas de germinação.
+      Inclua técnicas como hidratação, escarificação, pré-resfriamento, uso de papel toalha, cobertura leve do substrato e umidade ideal, mas apenas quando realmente fizer sentido para a espécie.
       Além disso, veja a lista de materiais em estoque abaixo e sugira como usá-los para o plantio (ex: qual substrato usar, se precisa de fertilizante disponível, etc).
       Estoque atual: ${stockList || "Nenhum material em estoque"}.
       MUITO IMPORTANTE: Verifique se esta semente específica se beneficia de uma hidratação prévia com água morna (quebra de dormência). Se sim, forneça as instruções de como fazer.
@@ -3162,13 +4410,17 @@ function SeedIdentifyView({ stock, onStartGermination, addToHistory }: { stock: 
             type: Type.OBJECT,
             properties: {
               name: { type: Type.STRING, description: "Nome da semente" },
+              species: { type: Type.STRING, description: "Nome científico se possível" },
               plantingInstructions: { type: Type.STRING, description: "Instruções de plantio" },
               stockSuggestions: { type: Type.STRING, description: "Sugestões baseadas no estoque" },
               estimatedGerminationDays: { type: Type.NUMBER, description: "Dias estimados para germinação" },
               warmWaterHydration: { type: Type.BOOLEAN, description: "Se a semente se beneficia de hidratação com água morna" },
-              hydrationInstructions: { type: Type.STRING, description: "Instruções de hidratação se aplicável" }
+              hydrationInstructions: { type: Type.STRING, description: "Instruções de hidratação se aplicável" },
+              germinationTechniques: { type: Type.STRING, description: "Técnicas de germinação recomendadas para esta semente" },
+              recommendedLight: { type: Type.STRING, description: "Luz ideal para a germinação" },
+              wateringTips: { type: Type.STRING, description: "Rega ideal durante a germinação" }
             },
-            required: ["name", "plantingInstructions", "stockSuggestions", "estimatedGerminationDays", "warmWaterHydration"]
+            required: ["name", "plantingInstructions", "stockSuggestions", "estimatedGerminationDays", "warmWaterHydration", "germinationTechniques", "recommendedLight", "wateringTips"]
           }
         }
       });
@@ -3253,6 +4505,24 @@ function SeedIdentifyView({ stock, onStartGermination, addToHistory }: { stock: 
                     </h4>
                     <div className="p-4 bg-blue-50 rounded-2xl text-blue-800 text-sm leading-relaxed border border-blue-100">
                       {seedData.stockSuggestions}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                      <FlaskConical className="w-5 h-5 text-purple-500" /> Técnicas de Germinação por IA
+                    </h4>
+                    <div className="p-4 bg-purple-50 rounded-2xl text-purple-900 text-sm leading-relaxed border border-purple-100">
+                      {seedData.germinationTechniques}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 text-sm text-amber-900">
+                      <b>Luz ideal na germinação</b><br />{seedData.recommendedLight}
+                    </div>
+                    <div className="p-4 bg-cyan-50 rounded-2xl border border-cyan-100 text-sm text-cyan-900">
+                      <b>Rega ideal</b><br />{seedData.wateringTips}
                     </div>
                   </div>
 
