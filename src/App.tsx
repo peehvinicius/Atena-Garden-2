@@ -48,6 +48,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { getGeminiClient, getGeminiErrorMessage, saveGeminiKeyLocally, clearGeminiKeyLocally, getSavedGeminiKey } from './lib/gemini';
 
 // --- Types ---
+interface PlantPhotoEntry {
+  id: string;
+  date: string;
+  image: string;
+  note?: string;
+  source?: string;
+}
+
 interface Plant {
   id: string;
   name: string;
@@ -66,6 +74,8 @@ interface Plant {
   drainage?: string;
   filterMaterial?: string;
   isFavorite?: boolean;
+  createdAt?: string;
+  photoHistory?: PlantPhotoEntry[];
 }
 
 interface Log {
@@ -136,6 +146,7 @@ interface Location {
   receivesRain?: boolean;
   sunPeriod?: string;
   notes?: string;
+  image?: string;
 }
 
 interface WeatherData {
@@ -196,6 +207,26 @@ interface StockRecommendationBundle {
   patch: Partial<Plant>;
 }
 
+interface DailyGardenInsights {
+  dayKey: string;
+  weekKey: string;
+  source: 'gemini' | 'local' | 'cache';
+  botanistOfDay: string;
+  priorities: string[];
+  checklist: string[];
+  maintenanceAdvice: string;
+  routineTips: string;
+  riskAnalysis: string;
+  germinationGuidance: string;
+  repotAdvice: string;
+  climateManagement: string;
+  weeklyReview: string;
+  newPlantsAdvice: string;
+  oldPlantsAdvice: string;
+  stockMixAdvice: string;
+  report: string;
+}
+
 const UNKNOWN_OPTION = '-';
 const PLANT_STATUS_OPTIONS: Plant['status'][] = ['Saudável', 'Recuperação', 'Problema', 'Muda'];
 const WATERING_OPTIONS = ['Diária', 'Semanal', 'Quinzenal', 'Mensal'];
@@ -204,6 +235,207 @@ const SUBSTRATE_OPTIONS = [UNKNOWN_OPTION, 'Terra vegetal', 'Terra + húmus', 'S
 const DRAINAGE_OPTIONS = [UNKNOWN_OPTION, 'Sem drenagem extra', 'Argila expandida', 'Brita', 'Areia grossa', 'Carvão vegetal'];
 const FILTER_OPTIONS = [UNKNOWN_OPTION, 'Sem manta', 'Manta bidim', 'Tela plástica', 'Filtro de café'];
 const STOCK_USAGE_TAGS = ['Substrato', 'Drenagem', 'Filtragem', 'Vaso', 'Ferramenta', 'Adubação', 'Germinação', 'Sementes & Mudas', 'Defensivo', 'Irrigação', 'Suporte', 'Outro'];
+
+const makeId = () => Math.random().toString(36).slice(2, 9);
+
+const createPhotoEntry = (image: string, note = 'Registro fotográfico', source = 'Manual', date = new Date().toISOString()): PlantPhotoEntry => ({
+  id: makeId(),
+  date,
+  image,
+  note,
+  source,
+});
+
+const normalizePhotoHistory = (photoHistory: unknown, image?: string, createdAt?: string) => {
+  const items = Array.isArray(photoHistory) ? photoHistory.filter(Boolean) : [];
+  const normalized = items
+    .map((item: any) => ({
+      id: item?.id || makeId(),
+      date: item?.date || createdAt || new Date().toISOString(),
+      image: item?.image || '',
+      note: item?.note || '',
+      source: item?.source || '',
+    }))
+    .filter((item: any) => !!item.image) as PlantPhotoEntry[];
+
+  if (!normalized.length && image) {
+    return [createPhotoEntry(image, 'Registro inicial', 'Cadastro', createdAt || new Date().toISOString())];
+  }
+
+  if (image && !normalized.some((item: PlantPhotoEntry) => item.image === image)) {
+    normalized.unshift(createPhotoEntry(image, 'Foto principal atual', 'Cadastro', createdAt || new Date().toISOString()));
+  }
+
+  return normalized;
+};
+
+const normalizePlantRecord = (plant: Partial<Plant>): Plant => {
+  const createdAt = plant.createdAt || plant.lastWatered || plant.lastRepotted || new Date().toISOString();
+  const photoHistory = normalizePhotoHistory((plant as any).photoHistory, plant.image, createdAt);
+  return {
+    id: plant.id || makeId(),
+    name: plant.name || 'Planta sem nome',
+    species: normalizeChoice(plant.species),
+    locationId: plant.locationId || '1',
+    status: (plant.status as Plant['status']) || 'Saudável',
+    wateringFrequency: plant.wateringFrequency || 'Semanal',
+    lastWatered: plant.lastWatered || '',
+    lastRepotted: plant.lastRepotted || '',
+    notes: plant.notes || '',
+    image: plant.image || photoHistory[0]?.image,
+    potSize: normalizeChoice(plant.potSize),
+    substrateMix: normalizeChoice(plant.substrateMix),
+    drainageLayer: normalizeChoice(plant.drainageLayer),
+    substrate: normalizeChoice(plant.substrate),
+    drainage: normalizeChoice(plant.drainage),
+    filterMaterial: normalizeChoice(plant.filterMaterial),
+    isFavorite: !!plant.isFavorite,
+    createdAt,
+    photoHistory,
+  };
+};
+
+const attachPhotoToPlant = (plant: Plant, image?: string | null, note = 'Atualização visual', source = 'Manual'): Plant => {
+  if (!image) return normalizePlantRecord(plant);
+  const history = normalizePhotoHistory(plant.photoHistory, plant.image, plant.createdAt);
+  const alreadyExists = history.some(item => item.image === image);
+  const nextHistory = alreadyExists ? history : [createPhotoEntry(image, note, source), ...history];
+  return normalizePlantRecord({ ...plant, image, photoHistory: nextHistory });
+};
+
+const getPlantLifeLabel = (createdAt?: string) => {
+  if (!createdAt) return 'Sem data';
+  const started = new Date(createdAt).getTime();
+  if (Number.isNaN(started)) return 'Sem data';
+  const diff = Math.max(0, Date.now() - started);
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'Hoje';
+  if (days < 30) return `${days} dia${days > 1 ? 's' : ''}`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} mês${months > 1 ? 'es' : ''}`;
+  const years = Math.floor(months / 12);
+  const remMonths = months % 12;
+  return `${years} ano${years > 1 ? 's' : ''}${remMonths ? ` e ${remMonths} mês${remMonths > 1 ? 'es' : ''}` : ''}`;
+};
+
+const imageFieldClassName = 'w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl';
+
+const isGeminiQuotaError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /RESOURCE_EXHAUSTED|quota|429|API_KEY_INVALID|missing-gemini-key|not valid/i.test(message);
+};
+
+async function getImageBrightness(base64Image: string): Promise<number> {
+  if (typeof document === 'undefined') return 160;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(160);
+      ctx.drawImage(img, 0, 0, 64, 64);
+      const data = ctx.getImageData(0, 0, 64, 64).data;
+      let total = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        total += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+      }
+      resolve(total / (data.length / 4));
+    };
+    img.onerror = () => resolve(160);
+    img.src = base64Image;
+  });
+}
+
+async function analyzeLightLocally(base64Image: string): Promise<LightAnalysisResult> {
+  const brightness = await getImageBrightness(base64Image);
+  let level = 'Meia Sombra';
+  let sunPeriod = 'Parcial';
+  if (brightness >= 190) {
+    level = 'Sol Pleno';
+    sunPeriod = 'Dia inteiro';
+  } else if (brightness >= 160) {
+    level = 'Sol Parcial';
+    sunPeriod = 'Parcial';
+  } else if (brightness >= 125) {
+    level = 'Meia Sombra';
+    sunPeriod = 'Manhã';
+  } else if (brightness >= 95) {
+    level = 'Luz Indireta';
+    sunPeriod = 'Não recebe sol direto';
+  } else {
+    level = 'Sombra';
+    sunPeriod = 'Não recebe sol direto';
+  }
+  return {
+    level,
+    sunPeriod,
+    explanation: `Leitura local básica baseada no brilho médio da foto (${Math.round(brightness)}).`,
+    tip: level === 'Sol Pleno' ? 'Bom para espécies de sol forte e vasos que drenem bem.' : level === 'Luz Indireta' || level === 'Sombra' ? 'Prefira folhagens e monitore excesso de umidade.' : 'Ambiente versátil para boa parte das ornamentais.',
+    middayTip: MIDDAY_LIGHT_GUIDE,
+  };
+}
+
+function identifyPlantLocally(light: LightAnalysisResult, stock: StockItem[]) {
+  const bundle = buildStockRecommendationBundle(stock, {
+    potSize: light.level === 'Sol Pleno' ? 'Médio' : 'Pequeno',
+    substrate: light.level === 'Sol Pleno' ? 'Terra + areia' : 'Terra vegetal',
+    drainage: light.level === 'Sol Pleno' ? 'Argila expandida' : 'Sem drenagem extra',
+    filterMaterial: 'Sem manta',
+  });
+  return {
+    name: light.level === 'Sol Pleno' ? 'Planta de sol fotografada' : 'Planta ornamental fotografada',
+    species: UNKNOWN_OPTION,
+    status: 'Saudável',
+    wateringFrequency: light.level === 'Sol Pleno' ? 'Semanal' : 'Quinzenal',
+    notes: `Identificação local básica. Revise manualmente a espécie. Luz estimada: ${light.level}.`,
+    potSize: bundle.patch.potSize || 'Médio',
+    substrate: bundle.patch.substrate || 'Terra vegetal',
+    substrateMix: UNKNOWN_OPTION,
+    drainage: bundle.patch.drainage || 'Argila expandida',
+    drainageLayer: UNKNOWN_OPTION,
+    filterMaterial: bundle.patch.filterMaterial || 'Sem manta',
+    stockSuggestions: bundle.summary,
+  };
+}
+
+function identifyStockLocally() {
+  return {
+    name: 'Item fotografado',
+    category: 'Outros',
+    usageTags: ['Outro'],
+    unit: 'un',
+    notes: 'Classificação local básica. Revise manualmente nome, categoria e uso.',
+    confidence: 'Baixa'
+  };
+}
+
+function identifySeedLocally(stock: StockItem[]) {
+  const substrateItem = getAvailableStockByUsageTag(stock, 'Substrato')[0] || stock[0];
+  const drainageItem = getAvailableStockByUsageTag(stock, 'Germinação')[0] || getAvailableStockByUsageTag(stock, 'Substrato')[0];
+  return {
+    name: 'Semente / embalagem fotografada',
+    species: UNKNOWN_OPTION,
+    plantingInstructions: 'Use recipiente limpo, substrato leve e semente a pouca profundidade. Mantenha umidade constante sem encharcar.',
+    stockSuggestions: substrateItem ? `Comece usando ${substrateItem.name}${drainageItem && drainageItem.id !== substrateItem.id ? ` e complemente com ${drainageItem.name}` : ''}.` : 'Use um substrato leve e limpo para germinação.',
+    estimatedGerminationDays: 7,
+    warmWaterHydration: false,
+    hydrationInstructions: 'Nem toda semente precisa de hidratação prévia. Faça somente se souber que a espécie se beneficia disso.',
+    germinationTechniques: 'Classificação local básica: mantenha temperatura estável, substrato leve e boa ventilação.',
+    recommendedLight: 'Luz indireta brilhante até a emergência das mudas.',
+    wateringTips: 'Borrife água para manter o substrato levemente úmido.'
+  }
+}
+
+function diagnosePlantLocally() {
+  return {
+    problem: 'Análise local básica',
+    cause: 'Não foi possível confirmar praga ou doença sem análise avançada. Revise rega, ventilação e sinais visuais.',
+    treatment: 'Remova partes muito danificadas, isole a planta se houver suspeita de praga, ajuste a rega e observe por 3 a 5 dias antes de intervir mais forte.',
+    severity: 'Baixa'
+  };
+}
 
 const normalizeChoice = (value?: string | null) => {
   const clean = (value || '').trim();
@@ -294,46 +526,168 @@ const normalizeSunPeriod = (value?: string | null) => {
   return 'Parcial';
 };
 
-async function analyzeLightWithAI(base64Image: string): Promise<LightAnalysisResult> {
-  const ai = getGeminiClient();
-  const model = 'gemini-2.5-flash';
-  const response = await ai.models.generateContent({
-    model,
-    contents: [{
-      parts: [
-        { text: `Analise esta foto do local ou da planta no ambiente e estime a luminosidade do ponto fotografado. Responda em Português do Brasil em JSON.
 
-Escolha level entre: ${LIGHT_LEVEL_OPTIONS.join(', ')}.
-Escolha sunPeriod entre: ${SUN_PERIOD_OPTIONS.join(', ')}.
-Explique de forma breve por que chegou nessa conclusão.
-Dê uma dica curta de cultivo para esse tipo de luz.
-No campo middayTip, sempre oriente que a medição ideal deve ser feita ao meio-dia para maior precisão do pico de luminosidade.` },
-        { inlineData: { data: base64Image.split(',')[1], mimeType: 'image/jpeg' } }
-      ]
-    }],
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          level: { type: Type.STRING },
-          sunPeriod: { type: Type.STRING },
-          explanation: { type: Type.STRING },
-          tip: { type: Type.STRING },
-          middayTip: { type: Type.STRING }
-        },
-        required: ['level', 'sunPeriod', 'explanation', 'tip', 'middayTip']
-      }
-    }
-  });
-  const data = JSON.parse(response.text || '{}');
+const DAILY_INSIGHTS_CACHE_PREFIX = 'atena_garden_daily_insights_v11';
+const WEATHER_CACHE_PREFIX = 'atena_garden_weather_cache_v11';
+const getDayKey = () => new Date().toISOString().slice(0, 10);
+const getWeekKey = () => {
+  const now = new Date();
+  const firstDay = new Date(now.getFullYear(), 0, 1);
+  const dayOfYear = Math.floor((now.getTime() - firstDay.getTime()) / 86400000) + 1;
+  const week = Math.ceil((dayOfYear + firstDay.getDay()) / 7);
+  return `${now.getFullYear()}-W${String(week).padStart(2, '0')}`;
+};
+const getInsightsCacheKey = (dayKey = getDayKey()) => `${DAILY_INSIGHTS_CACHE_PREFIX}:${dayKey}`;
+const getWeatherCacheKey = (settings: AppSettings) => `${WEATHER_CACHE_PREFIX}:${settings.weatherMode}:${(settings.gardenAddress || 'auto').trim().toLowerCase()}`;
+const WATERING_DAY_MAP: Record<string, number> = { 'Diária': 1, 'Semanal': 7, 'Quinzenal': 15, 'Mensal': 30 };
+const getPlantAgeDays = (createdAt?: string) => {
+  if (!createdAt) return 0;
+  const started = new Date(createdAt).getTime();
+  if (Number.isNaN(started)) return 0;
+  return Math.max(0, Math.floor((Date.now() - started) / 86400000));
+};
+const isPlantLikelyDue = (plant: Plant) => {
+  const interval = WATERING_DAY_MAP[plant.wateringFrequency] || 7;
+  if (!plant.lastWatered) return true;
+  const last = new Date(plant.lastWatered).getTime();
+  if (Number.isNaN(last)) return true;
+  return ((Date.now() - last) / 86400000) >= interval;
+};
+const compactList = (values: string[], fallback = 'nenhum destaque') => {
+  const cleaned = values.map(v => (v || '').trim()).filter(Boolean);
+  return cleaned.length ? cleaned.join(', ') : fallback;
+};
+const buildMiniGardenContext = (plants: Plant[], locations: Location[], weather: WeatherData | null, forecast: ForecastData | null, germinations: Germination[], tasks: Task[], stock: StockItem[], history: HistoryItem[]) => {
+  const duePlants = plants.filter(isPlantLikelyDue);
+  const stressedPlants = plants.filter(p => p.status === 'Problema' || p.status === 'Recuperação');
+  const youngPlants = plants.filter(p => getPlantAgeDays(p.createdAt) <= 30);
+  const oldPlants = plants.filter(p => getPlantAgeDays(p.createdAt) >= 180);
+  const runningGerminations = germinations.filter(g => g.status === 'Em andamento');
+  const uncoveredLocations = locations.filter(location => location.receivesRain || !location.covered).map(location => location.name);
+  const recentHistory = history.slice(0, 8).map(item => `${item.type}:${item.title}`).join('; ');
+  const stockSummary = stock.slice(0, 8).map(item => `${item.name}/${compactList(inferStockUsageTags(item), 'uso geral')}/${item.quantity}${item.unit}`).join('; ');
   return {
-    level: normalizeLightLevel(data.level),
-    sunPeriod: normalizeSunPeriod(data.sunPeriod),
-    explanation: normalizeChoice(data.explanation),
-    tip: normalizeChoice(data.tip),
-    middayTip: normalizeChoice(data.middayTip) === UNKNOWN_OPTION ? MIDDAY_LIGHT_GUIDE : normalizeChoice(data.middayTip),
+    weatherLine: weather ? `${weather.temp}°C, ${weather.condition}, umidade ${weather.humidity}%, chuva ${weather.rainProb}%` : 'clima indisponível',
+    forecastLine: forecast ? `amanhã ${forecast.tempMax}/${forecast.tempMin}°C, ${forecast.condition}, chuva ${forecast.rainProb}%` : 'sem previsão',
+    plantsLine: compactList(plants.slice(0, 8).map(plant => {
+      const locationName = locations.find(location => location.id === plant.locationId)?.name || 'local indefinido';
+      return `${plant.name} (${plant.status}, ${plant.wateringFrequency}, ${locationName}, ${getPlantAgeDays(plant.createdAt)}d)`;
+    })),
+    dueCount: duePlants.length,
+    stressedCount: stressedPlants.length,
+    youngCount: youngPlants.length,
+    oldCount: oldPlants.length,
+    dueNames: compactList(duePlants.slice(0, 4).map(plant => plant.name)),
+    stressedNames: compactList(stressedPlants.slice(0, 4).map(plant => plant.name)),
+    youngNames: compactList(youngPlants.slice(0, 4).map(plant => plant.name)),
+    oldNames: compactList(oldPlants.slice(0, 4).map(plant => plant.name)),
+    germinationLine: runningGerminations.length ? compactList(runningGerminations.slice(0, 4).map(g => `${g.name} (${Math.max(0, g.expectedDays - Math.floor((Date.now() - new Date(g.startDate).getTime()) / 86400000))}d restantes)`)) : 'nenhuma germinação em andamento',
+    taskLine: compactList(tasks.filter(task => !task.completed).slice(0, 5).map(task => task.title)),
+    uncoveredLine: compactList(uncoveredLocations.slice(0, 4)),
+    stockLine: stockSummary || 'estoque vazio',
+    recentHistory: recentHistory || 'sem histórico recente',
   };
+};
+const generateLocalInsights = (plants: Plant[], locations: Location[], weather: WeatherData | null, forecast: ForecastData | null, germinations: Germination[], tasks: Task[], stock: StockItem[], history: HistoryItem[]): DailyGardenInsights => {
+  const dayKey = getDayKey();
+  const weekKey = getWeekKey();
+  const duePlants = plants.filter(isPlantLikelyDue);
+  const stressedPlants = plants.filter(p => p.status === 'Problema' || p.status === 'Recuperação');
+  const youngPlants = plants.filter(p => getPlantAgeDays(p.createdAt) <= 30);
+  const oldPlants = plants.filter(p => getPlantAgeDays(p.createdAt) >= 180);
+  const runningGerminations = germinations.filter(g => g.status === 'Em andamento');
+  const readyToTransfer = germinations.filter(g => g.status === 'Sucesso' && !g.transferredPlantId);
+  const recentHistory = history.filter(item => Date.now() - new Date(item.date).getTime() <= 7 * 86400000);
+  const hotWeather = !!weather && weather.temp >= 32;
+  const rainyWeather = !!weather && weather.rainProb >= 70;
+  const uncoveredPlants = plants.filter(plant => {
+    const location = locations.find(loc => loc.id === plant.locationId);
+    return location && (!location.covered || location.receivesRain);
+  });
+  const substrateChoice = getAvailableStockByUsageTag(stock, 'Substrato')[0]?.name || getAvailableStockByCategory(stock, 'Substratos')[0]?.name || 'substrato leve';
+  const drainageChoice = getAvailableStockByUsageTag(stock, 'Drenagem')[0]?.name || 'argila expandida ou equivalente';
+  const filterChoice = getAvailableStockByUsageTag(stock, 'Filtragem')[0]?.name || 'manta ou tela filtrante';
+  const priorities = [
+    duePlants.length ? `Regar ${duePlants.length} planta(s): ${compactList(duePlants.slice(0, 3).map(plant => plant.name))}.` : '',
+    stressedPlants.length ? `Revisar ${stressedPlants.length} planta(s) em recuperação/problema: ${compactList(stressedPlants.slice(0, 3).map(plant => plant.name))}.` : '',
+    runningGerminations.length ? `Checar ${runningGerminations.length} germinação(ões): ${compactList(runningGerminations.slice(0, 3).map(item => item.name))}.` : '',
+    hotWeather ? `Dia quente (${weather?.temp}°C). Priorize sombra parcial e umidade controlada nas áreas sensíveis.` : '',
+    rainyWeather && uncoveredPlants.length ? `Há chance alta de chuva para ${uncoveredPlants.length} planta(s) em local descoberto.` : '',
+  ].filter(Boolean).slice(0, 3);
+  const checklist = [
+    duePlants.length ? 'Regar apenas o que estiver realmente com substrato secando, sem encharcar.' : 'Conferir umidade antes de qualquer rega extra.',
+    runningGerminations.length ? 'Observar germinação e manter umidade leve e constante.' : 'Revisar vasos novos e mudas recentes.',
+    hotWeather ? 'Evitar replantio no pico do calor e proteger folhas mais sensíveis.' : 'Aproveitar o clima para organização leve do jardim.',
+    rainyWeather ? 'Verificar ambientes descobertos e drenagem ativa.' : 'Checar se ambientes cobertos continuam bem ventilados.',
+    stock.length ? `Separar ${substrateChoice} e ${drainageChoice} para próximos manejos.` : 'Atualizar o estoque básico antes do próximo replantio.',
+  ].slice(0, 5);
+  const weeklyTypes = recentHistory.reduce((acc, item) => { acc[item.type] = (acc[item.type] || 0) + 1; return acc; }, {} as Record<string, number>);
+  return {
+    dayKey,
+    weekKey,
+    source: 'local',
+    botanistOfDay: hotWeather
+      ? `Calor em alta: foque em umidade equilibrada, sombra parcial e revisão do fim do dia.`
+      : duePlants.length
+        ? `Seu jardim pede atenção em ${duePlants.length} rega(s) e revisão das plantas mais novas.`
+        : `Jardim estável hoje: aproveite para observar evolução, limpar folhas e organizar o estoque.`,
+    priorities: priorities.length ? priorities : ['Observar o estado geral do jardim, revisar folhas e manter a rotina leve.'],
+    checklist,
+    maintenanceAdvice: stressedPlants.length
+      ? `Priorize ${compactList(stressedPlants.slice(0, 3).map(plant => plant.name))}. Revise rega, ventilação, drenagem e exposição do ambiente antes de intervir mais forte.`
+      : `Mantenha a rotina alinhada ao clima e à idade das plantas. Jovens pedem observação mais frequente; plantas antigas pedem manutenção mais estável.`,
+    routineTips: runningGerminations.length
+      ? `Hoje vale borrifar mudas e checar germinação antes do meio da tarde. Evite mudanças bruscas de ambiente.`
+      : hotWeather
+        ? `Evite replantios no horário mais quente. Faça inspeção leve pela manhã e reavalie no fim do dia.`
+        : `Bom dia para revisar substrato, vasos e folhas sem pressa.`,
+    riskAnalysis: rainyWeather && uncoveredPlants.length
+      ? `Risco de excesso de umidade em áreas descobertas. Revise drenagem e afaste vasos mais sensíveis da chuva direta.`
+      : hotWeather
+        ? `Risco de estresse térmico em locais de sol pleno e em mudas recém-transferidas.`
+        : `Risco baixo hoje. Foque em prevenção simples e observação.`,
+    germinationGuidance: runningGerminations.length
+      ? `Germinações em andamento: ${compactList(runningGerminations.slice(0, 3).map(item => item.name))}. Mantenha luz indireta brilhante, umidade leve e monitoramento diário sem excesso de água.`
+      : readyToTransfer.length
+        ? `Há germinações prontas para virar planta do jardim. Planeje a transferência com substrato leve e boa drenagem.`
+        : `Sem germinação crítica hoje. Aproveite para organizar sementes, etiquetas e recipiente de mudas.`,
+    repotAdvice: `Para próximos replantios, prefira combinar ${substrateChoice} com ${drainageChoice} e ${filterChoice}. Faça isso fora do pico de calor e observe plantas em recuperação primeiro.`,
+    climateManagement: weather
+      ? `Clima de hoje: ${weather.temp}°C, ${weather.condition}, umidade ${weather.humidity}% e chuva ${weather.rainProb}%. Ajuste manejo conforme calor, chuva e exposição de cada ambiente.`
+      : 'Sem clima em tempo real. Use a regra local do app para priorizar observação dos ambientes mais expostos.',
+    weeklyReview: recentHistory.length
+      ? `Na semana, houve ${recentHistory.length} registro(s): ${Object.entries(weeklyTypes).map(([type, count]) => `${count} ${type.toLowerCase()}`).join(', ')}. Observe o que evoluiu e o que ainda precisa de constância.`
+      : 'Ainda há pouco histórico nesta semana. Gere novos registros de foto, rega e replantio para melhorar a revisão semanal.',
+    newPlantsAdvice: youngPlants.length
+      ? `Plantas novas: ${compactList(youngPlants.slice(0, 3).map(plant => plant.name))}. Priorize adaptação, observação diária e rega com cautela nos primeiros 30 dias.`
+      : 'Sem muitas plantas recém-cadastradas. Mantenha um protocolo leve para as próximas entradas no jardim.',
+    oldPlantsAdvice: oldPlants.length
+      ? `Plantas antigas: ${compactList(oldPlants.slice(0, 3).map(plant => plant.name))}. Revise histórico de replantio, vigor e constância da manutenção para evitar queda lenta de desempenho.`
+      : 'Seu jardim ainda está em fase jovem ou sem datas antigas suficientes para conselhos de plantas maduras.',
+    stockMixAdvice: `Com o estoque atual, a mistura mais útil para muda, germinação ou replantio é começar por ${substrateChoice}, reforçar drenagem com ${drainageChoice} e usar ${filterChoice} quando o recipiente pedir separação de camadas.`,
+    report: `Resumo local do jardim: ${plants.length} planta(s), ${duePlants.length} possível(is) rega(s) pendente(s), ${stressedPlants.length} planta(s) sensível(is), ${runningGerminations.length} germinação(ões) ativa(s) e ${stock.length} item(ns) em estoque.`
+  };
+};
+const buildGeminiInsightsPrompt = (context: ReturnType<typeof buildMiniGardenContext>) => `Você é um botânico de bolso. Com base apenas nestes dados curtos do jardim, gere um JSON em pt-BR com textos curtos e práticos.
+
+Contexto:
+- clima: ${context.weatherLine}
+- previsão: ${context.forecastLine}
+- plantas: ${context.plantsLine}
+- regas pendentes: ${context.dueCount} (${context.dueNames})
+- plantas sensíveis: ${context.stressedCount} (${context.stressedNames})
+- plantas novas: ${context.youngCount} (${context.youngNames})
+- plantas antigas: ${context.oldCount} (${context.oldNames})
+- germinação: ${context.germinationLine}
+- tarefas: ${context.taskLine}
+- ambientes descobertos: ${context.uncoveredLine}
+- estoque: ${context.stockLine}
+- histórico recente: ${context.recentHistory}
+
+Responda em JSON com estes campos: botanistOfDay (string), priorities (array com 3 strings), checklist (array com até 5 strings), maintenanceAdvice (string), routineTips (string), riskAnalysis (string), germinationGuidance (string), repotAdvice (string), climateManagement (string), weeklyReview (string), newPlantsAdvice (string), oldPlantsAdvice (string), stockMixAdvice (string), report (string). Limites: textos curtos, sem repetir contexto inteiro, sem mencionar imagem, sem listas longas.`;
+
+async function analyzeLightWithAI(base64Image: string): Promise<LightAnalysisResult> {
+  return analyzeLightLocally(base64Image);
 }
 
 const getAvailableStockByCategory = (stock: StockItem[], category: string) =>
@@ -607,6 +961,7 @@ export default function App() {
     receivesRain: location.receivesRain ?? false,
     sunPeriod: location.sunPeriod || 'Parcial',
     notes: location.notes || '',
+    image: location.image || '',
   });
 
   const safeJsonParse = <T,>(raw: string | null, fallback: T): T => {
@@ -651,35 +1006,46 @@ export default function App() {
   const fetchWeather = async (forceSettings?: AppSettings) => {
     setLoadingWeather(true);
     const currentSettings = forceSettings || settings;
+    const dayKey = getDayKey();
+    const cacheKey = getWeatherCacheKey(currentSettings);
+    const cachedWeather = safeJsonParse<any>(localStorage.getItem(cacheKey), null);
+    if (cachedWeather?.dayKey === dayKey && cachedWeather?.weather && cachedWeather?.forecast) {
+      setWeather(cachedWeather.weather);
+      setForecast(cachedWeather.forecast);
+      setLoadingWeather(false);
+      return;
+    }
+
+    const persistWeather = (nextWeather: WeatherData, nextForecast: ForecastData) => {
+      setWeather(nextWeather);
+      setForecast(nextForecast);
+      localStorage.setItem(cacheKey, JSON.stringify({ dayKey, weather: nextWeather, forecast: nextForecast }));
+    };
 
     const getWeatherData = async (latitude: number, longitude: number, label: string) => {
       try {
-        const response = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`
-        );
+        const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`);
         const data = await response.json();
-
         const weatherCodeMap: Record<number, string> = {
           0: 'Céu Limpo', 1: 'Principalmente Limpo', 2: 'Parcialmente Nublado', 3: 'Nublado',
           45: 'Nevoeiro', 48: 'Nevoeiro com geada', 51: 'Garoa Leve', 61: 'Chuva Leve',
           80: 'Pancadas de Chuva', 95: 'Trovoada'
         };
-
-        setWeather({
+        const nextWeather: WeatherData = {
           temp: Math.round(data.current.temperature_2m),
           condition: weatherCodeMap[data.current.weather_code] || 'Variável',
           humidity: data.current.relative_humidity_2m,
           wind: Math.round(data.current.wind_speed_10m),
           rainProb: data.daily.precipitation_probability_max[0],
           locationName: label
-        });
-
-        setForecast({
+        };
+        const nextForecast: ForecastData = {
           tempMax: Math.round(data.daily.temperature_2m_max[1]),
           tempMin: Math.round(data.daily.temperature_2m_min[1]),
           condition: weatherCodeMap[data.daily.weather_code[1]] || 'Variável',
           rainProb: data.daily.precipitation_probability_max[1]
-        });
+        };
+        persistWeather(nextWeather, nextForecast);
       } catch (e) {
         console.error('Weather fetch error', e);
       } finally {
@@ -689,10 +1055,8 @@ export default function App() {
 
     if (currentSettings.weatherMode === 'manual' && currentSettings.gardenAddress) {
       try {
-        // Geocoding using Open-Meteo Geocoding API
         const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(currentSettings.gardenAddress)}&count=1&language=pt&format=json`);
         const geoData = await geoRes.json();
-        
         if (geoData.results && geoData.results.length > 0) {
           const { latitude, longitude, name, admin1 } = geoData.results[0];
           await getWeatherData(latitude, longitude, `${name}, ${admin1 || ''}`);
@@ -704,20 +1068,14 @@ export default function App() {
         setLoadingWeather(false);
       }
     } else {
-      // Auto mode
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           await getWeatherData(position.coords.latitude, position.coords.longitude, 'Sua Localização');
         },
         () => {
-          setWeather({
-            temp: 25,
-            condition: 'Localização Desativada',
-            humidity: 50,
-            wind: 10,
-            rainProb: 0,
-            locationName: 'Configure um endereço'
-          });
+          const fallbackWeather: WeatherData = { temp: 25, condition: 'Localização Desativada', humidity: 50, wind: 10, rainProb: 0, locationName: 'Configure um endereço' };
+          const fallbackForecast: ForecastData = { tempMax: 27, tempMin: 20, condition: 'Variável', rainProb: 10 };
+          persistWeather(fallbackWeather, fallbackForecast);
           setLoadingWeather(false);
         }
       );
@@ -749,7 +1107,7 @@ export default function App() {
       const historyList = parsed.history || [];
       const locationsList = parsed.locations || [];
 
-      if (plantsList.length > 0) setPlants(plantsList);
+      if (plantsList.length > 0) setPlants(plantsList.map((plant: any) => normalizePlantRecord(plant)));
       if (logsList.length > 0) setLogs(logsList);
       if (stockList.length > 0) setStock(stockList.map((item: any) => ({
         category: item.category || 'Insumos Gerais',
@@ -763,9 +1121,9 @@ export default function App() {
     } else {
       // Default data
       setPlants([
-        { id: '1', name: 'Manjericão', species: 'Ocimum basilicum', locationId: '1', status: 'Saudável', wateringFrequency: 'Diária', lastWatered: new Date().toISOString(), potSize: 'Médio', substrateMix: 'Terra Vegetal + Húmus' },
-        { id: '2', name: 'Lírio da Paz', species: 'Spathiphyllum', locationId: '3', status: 'Saudável', wateringFrequency: 'Semanal' },
-        { id: '3', name: 'Babosa', species: 'Aloe vera', locationId: '2', status: 'Recuperação', wateringFrequency: 'Quinzenal' },
+        normalizePlantRecord({ id: '1', name: 'Manjericão', species: 'Ocimum basilicum', locationId: '1', status: 'Saudável', wateringFrequency: 'Diária', lastWatered: new Date().toISOString(), potSize: 'Médio', substrateMix: 'Terra Vegetal + Húmus' }),
+        normalizePlantRecord({ id: '2', name: 'Lírio da Paz', species: 'Spathiphyllum', locationId: '3', status: 'Saudável', wateringFrequency: 'Semanal' }),
+        normalizePlantRecord({ id: '3', name: 'Babosa', species: 'Aloe vera', locationId: '2', status: 'Recuperação', wateringFrequency: 'Quinzenal' }),
       ]);
       setStock([
         { id: '1', name: 'Terra Vegetal', quantity: 5, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato'] },
@@ -828,7 +1186,7 @@ export default function App() {
 
       setPlants(prev => prev.map(p => 
         p.wateringFrequency === frequency 
-          ? { ...p, lastWatered: now } 
+          ? normalizePlantRecord({ ...p, lastWatered: now }) 
           : p
       ));
 
@@ -884,7 +1242,7 @@ export default function App() {
     if (!plant) return;
 
     setPlants(prev => prev.map(p => 
-      p.id === plantId ? { ...p, lastWatered: now } : p
+      p.id === plantId ? normalizePlantRecord({ ...p, lastWatered: now }) : p
     ));
 
     setLogs(prev => [{
@@ -908,7 +1266,7 @@ export default function App() {
 
   const handleUpdatePlant = (updatedPlant: Plant) => {
     setPlants(prev => {
-      let newPlants = prev.map(p => p.id === updatedPlant.id ? updatedPlant : p);
+      let newPlants = prev.map(p => p.id === updatedPlant.id ? normalizePlantRecord(updatedPlant) : p);
       
       // Se a planta atualizada foi marcada como favorita, desmarca as outras para manter apenas um fundo
       if (updatedPlant.isFavorite) {
@@ -1081,9 +1439,11 @@ export default function App() {
       drainage: payload.drainage || '',
       filterMaterial: payload.filterMaterial || '',
       isFavorite: false,
+      createdAt: new Date().toISOString(),
+      photoHistory: (payload.image || germination.image) ? [createPhotoEntry(payload.image || germination.image!, 'Registro inicial vindo da germinação', 'Germinação')] : [],
     };
 
-    setPlants(prev => [newPlant, ...prev]);
+    setPlants(prev => [normalizePlantRecord(newPlant), ...prev]);
     setGerminations(prev => prev.map(g => g.id === germinationId ? { ...g, status: 'Transferida', transferredPlantId: newPlant.id, transferredAt: new Date().toISOString() } : g));
     addToHistory({
       type: 'Atualização',
@@ -1386,6 +1746,8 @@ export default function App() {
               history={history}
               wateredToday={wateredToday}
               activeAlerts={activeAlerts}
+              stock={stock}
+              germinations={germinations}
             />
           )}
 
@@ -1511,7 +1873,7 @@ export default function App() {
 
 // --- View Components ---
 
-function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats, filteredPlants, locations, setActiveTab, tasks, setWateringConfirmation, history, wateredToday, activeAlerts }: any) {
+function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats, filteredPlants, locations, setActiveTab, tasks, setWateringConfirmation, history, wateredToday, activeAlerts, stock, germinations }: any) {
   return (
     <motion.div 
       key="dashboard"
@@ -1672,7 +2034,10 @@ function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats,
             Ver todas <ChevronRight className="w-4 h-4" />
           </button>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        <div className="mb-5 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm text-slate-600 shadow-sm">
+        Cada planta agora mostra <b>tempo de vida no jardim</b> e um <b>histórico visual</b> para acompanhar a evolução desde o primeiro cadastro.
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {filteredPlants.slice(0, 4).map((plant: any) => (
             <PlantCard key={plant.id} plant={plant} location={locations.find((l: any) => l.id === plant.locationId)?.name} />
           ))}
@@ -1692,7 +2057,7 @@ function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats,
           </div>
         </div>
         
-        <SpecialistTips plants={filteredPlants} locations={locations} weather={weather} forecast={forecast} />
+        <SpecialistTips plants={filteredPlants} locations={locations} weather={weather} forecast={forecast} tasks={tasks} germinations={germinations} stock={stock} history={history} />
       </section>
     </motion.div>
   );
@@ -1852,7 +2217,8 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
     covered: true,
     receivesRain: false,
     sunPeriod: 'Parcial',
-    notes: ''
+    notes: '',
+    image: ''
   });
   const [lightScanImage, setLightScanImage] = useState<string | null>(null);
   const [lightAnalyzing, setLightAnalyzing] = useState(false);
@@ -1873,7 +2239,8 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
       covered: true,
       receivesRain: false,
       sunPeriod: 'Parcial',
-      notes: ''
+      notes: '',
+      image: ''
     });
     setLightScanImage(null);
     setLightResult(null);
@@ -1911,6 +2278,14 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
         setLightAnalyzing(false);
       }
     };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLocationImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => setDraft(prev => ({ ...prev, image: reader.result as string }));
     reader.readAsDataURL(file);
   };
 
@@ -1966,6 +2341,20 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
             placeholder="Exposição / face"
             className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl"
           />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-[1fr,220px] gap-4 items-start">
+          <div>
+            <label className="text-sm font-semibold text-slate-700 block mb-2">Foto do ambiente</label>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
+              <Camera className="w-4 h-4" /> Adicionar foto manual
+              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleLocationImage} />
+            </label>
+            {draft.image && <img src={draft.image} alt="Ambiente" className="mt-3 h-40 w-full object-cover rounded-2xl border border-slate-200" />}
+          </div>
+          <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
+            <b>Ambiente visual</b><br />
+            Adicione uma foto manual para comparar futuras medições de luz e mudanças no espaço.
+          </div>
         </div>
         <textarea
           value={draft.notes || ''}
@@ -2039,6 +2428,7 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
               </div>
             </div>
 
+            {location.image && <img src={location.image} alt={location.name} className="w-full h-44 object-cover rounded-2xl border border-slate-200" />}
             {location.notes && <div className="p-4 rounded-2xl bg-slate-50 text-sm text-slate-600">{location.notes}</div>}
 
             {location.plants.length > 0 ? (
@@ -2125,7 +2515,7 @@ function SeedsView({ stock, germinations, locations, onStartGermination, onUpdat
 }
 
 function GerminationView({ germinations, locations, onNewPlanting, onStartGermination, onUpdateGermination, onDeleteGermination, onTransferToGarden }: { germinations: Germination[], locations: Location[], onNewPlanting?: () => void, onStartGermination: (g: Germination) => void, onUpdateGermination: (g: Germination) => void, onDeleteGermination: (id: string) => void, onTransferToGarden: (germinationId: string, payload?: Partial<Plant>) => void }) {
-  const [manualSeed, setManualSeed] = useState({ name: '', species: '', expectedDays: 7, notes: '' });
+  const [manualSeed, setManualSeed] = useState({ name: '', species: '', expectedDays: 7, notes: '', image: '' });
   const [transferingId, setTransferingId] = useState<string | null>(null);
   const [transferDraft, setTransferDraft] = useState<Partial<Plant>>({
     locationId: locations[0]?.id || '',
@@ -2148,9 +2538,18 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
       notes: manualSeed.notes,
       lastWatered: new Date().toISOString(),
       germinationTechniques: 'Registro manual de germinação.',
-      wateringTips: 'Mantenha o substrato levemente úmido, sem encharcar.'
+      wateringTips: 'Mantenha o substrato levemente úmido, sem encharcar.',
+      image: manualSeed.image
     } as Germination);
-    setManualSeed({ name: '', species: '', expectedDays: 7, notes: '' });
+    setManualSeed({ name: '', species: '', expectedDays: 7, notes: '', image: '' });
+  };
+
+  const handleManualSeedImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => setManualSeed(prev => ({ ...prev, image: reader.result as string }));
+    reader.readAsDataURL(file);
   };
 
   const startTransfer = (germination: Germination) => {
@@ -2200,6 +2599,11 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
             <input type="number" value={manualSeed.expectedDays} onChange={(e) => setManualSeed({ ...manualSeed, expectedDays: Number(e.target.value) })} placeholder="Dias" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl" />
           </div>
           <textarea value={manualSeed.notes} onChange={(e) => setManualSeed({ ...manualSeed, notes: e.target.value })} placeholder="Técnicas, lembretes ou observações" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl min-h-[88px]" />
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
+            <Camera className="w-4 h-4" /> Adicionar foto manual
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualSeedImage} />
+          </label>
+          {manualSeed.image && <img src={manualSeed.image} alt="Germinação manual" className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
           <button onClick={addManualGermination} className="w-full bg-emerald-500 text-white py-3 rounded-2xl font-bold hover:bg-emerald-600 transition-colors">Salvar germinação manual</button>
         </div>
       </div>
@@ -2383,77 +2787,18 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
     setAiError(null);
     setAiPreview(null);
     try {
-      const ai = getGeminiClient();
-      const model = 'gemini-2.5-flash';
-      const response = await ai.models.generateContent({
-        model,
-        contents: [{ parts: [
-          { text: `Analise a imagem de um item de jardinagem ou cultivo e identifique o que provavelmente é. Responda em Português do Brasil em JSON.
-
-Escolha a melhor categoria principal entre: ${categories.join(', ')}.
-Escolha uma ou mais categorias de uso no app entre: ${STOCK_USAGE_TAGS.join(', ')}.
-Escolha a melhor unidade entre: ${units.join(', ')}.
-Quando houver dúvida, use '-' em notes curtas ou suggestedUse.
-
-Campos esperados:
-- name: nome provável do item
-- category: categoria principal mais adequada
-- usageTags: lista com uma ou mais categorias de uso no app
-- unit: unidade mais provável de controle
-- notes: resumo curto do que é ou para que serve
-- suggestedUse: como esse item costuma ser usado no jardim
-- confidence: Alta, Média ou Baixa` },
-          { inlineData: { data: base64Image.split(',')[1], mimeType: 'image/jpeg' } }
-        ] }],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              category: { type: Type.STRING },
-              usageTags: { type: Type.ARRAY, items: { type: Type.STRING } },
-              unit: { type: Type.STRING },
-              notes: { type: Type.STRING },
-              suggestedUse: { type: Type.STRING },
-              confidence: { type: Type.STRING }
-            },
-            required: ['name', 'category', 'usageTags', 'unit', 'notes', 'suggestedUse', 'confidence']
-          }
-        }
-      });
-      const data = JSON.parse(response.text || '{}');
-      const safeCategory = categories.includes(data.category) ? data.category : 'Outros';
-      const safeUnit = units.includes(data.unit) ? data.unit : 'un';
-      const safeUsageTags = normalizeStockUsageTags(data.usageTags).length ? normalizeStockUsageTags(data.usageTags) : inferStockUsageTags({ name: data.name, category: safeCategory, notes: [data.notes, data.suggestedUse].filter(Boolean).join(' ') });
-      const notes = [normalizeChoice(data.notes), normalizeChoice(data.suggestedUse) !== '-' ? `Uso sugerido: ${normalizeChoice(data.suggestedUse)}` : ''].filter(Boolean).join(' • ');
+      const local = identifyStockLocally();
       const preview = {
-        name: normalizeChoice(data.name),
-        category: safeCategory,
-        usageTags: safeUsageTags,
-        unit: safeUnit,
-        notes,
-        confidence: normalizeChoice(data.confidence)
+        name: local.name,
+        category: local.category,
+        usageTags: local.usageTags,
+        unit: local.unit,
+        notes: local.notes,
+        confidence: local.confidence
       };
       setAiPreview(preview);
-      setNewItem(prev => ({
-        ...prev,
-        name: preview.name,
-        category: preview.category,
-        unit: preview.unit,
-        usageTags: preview.usageTags,
-        notes: preview.notes,
-        quantity: prev.quantity ?? 0,
-      }));
-      setShowAddForm(true);
-      addToHistory({
-        type: 'Atualização',
-        title: `IA analisou item de estoque: ${preview.name}`,
-        details: `Categoria sugerida: ${preview.category}. Usos no app: ${preview.usageTags?.join(', ') || '-'}. Confiança: ${preview.confidence}.`
-      });
-    } catch (err) {
-      console.error(err);
-      setAiError(getGeminiErrorMessage(err, 'Não consegui identificar esse item de estoque agora. Tente outra foto ou faça o cadastro manual.'));
+      setNewItem(prev => ({ ...prev, name: preview.name, category: preview.category, unit: preview.unit, notes: preview.notes, usageTags: preview.usageTags }));
+      setAiError('Usei a análise local básica para você revisar e completar manualmente o item do estoque.');
     } finally {
       setIdentifying(false);
     }
@@ -2475,7 +2820,7 @@ Campos esperados:
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Estoque de Insumos</h2>
-          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico e use IA para acelerar o cadastro dos itens.</p>
+          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico. A identificação pode usar IA avançada quando disponível ou um modo local básico para não travar o cadastro.</p>
         </div>
         <div className="flex flex-wrap gap-3">
           <button 
@@ -3092,41 +3437,8 @@ function DiagnoseView({ addToHistory, setToast }: any) {
     setError(null);
     setConfirmed(false);
     try {
-      const ai = getGeminiClient();
-      const model = "gemini-2.5-flash";
-      
-      const prompt = "Analise esta foto de uma planta. Identifique se ela possui alguma praga, doença ou deficiência nutricional. Forneça o nome do problema, a causa provável e um tratamento detalhado (preferencialmente orgânico ou caseiro). Responda em Português do Brasil em formato JSON.";
-      
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inlineData: { data: base64Image.split(',')[1], mimeType: "image/jpeg" } }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              problem: { type: Type.STRING, description: "Nome da praga ou doença" },
-              cause: { type: Type.STRING, description: "Causa provável" },
-              treatment: { type: Type.STRING, description: "Tratamento recomendado" },
-              severity: { type: Type.STRING, description: "Nível de gravidade (Baixa, Média, Alta)" }
-            },
-            required: ["problem", "cause", "treatment", "severity"]
-          }
-        }
-      });
-
-      const data = JSON.parse(response.text || "{}");
-      setResult(data);
-    } catch (err: any) {
-      console.error(err);
-      setError("Erro ao analisar a saúde da planta. Tente uma foto mais aproximada da área afetada.");
+      setResult(diagnosePlantLocally());
+      setError('O diagnóstico por imagem agora usa análise local básica. Revise o resultado antes de agir.');
     } finally {
       setAnalyzing(false);
     }
@@ -3153,8 +3465,8 @@ function DiagnoseView({ addToHistory, setToast }: any) {
       className="max-w-2xl mx-auto space-y-8"
     >
       <div className="text-center">
-        <h2 className="text-3xl font-bold text-slate-900 mb-2">Diagnóstico de Saúde IA</h2>
-        <p className="text-slate-500">Identifique pragas e doenças tirando uma foto da parte afetada da planta.</p>
+        <h2 className="text-3xl font-bold text-slate-900 mb-2">Diagnóstico de Saúde</h2>
+        <p className="text-slate-500">Identifique pragas e doenças tirando uma foto da parte afetada da planta. Se a IA avançada não responder, o app mostra uma triagem local básica.</p>
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
@@ -3273,6 +3585,7 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLi
     filterMaterial: UNKNOWN_OPTION,
     substrateMix: UNKNOWN_OPTION,
     drainageLayer: UNKNOWN_OPTION,
+    image: ''
   });
 
   const matchSelectOption = (value: string | undefined, options: string[]) => {
@@ -3339,92 +3652,23 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLi
     }
   };
 
+  const handleManualImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => setManualPlant(prev => ({ ...prev, image: reader.result as string }));
+    reader.readAsDataURL(file);
+  };
+
   const identifyPlant = async (base64Image: string) => {
     setIdentifying(true);
     setError(null);
     setConfirmed(false);
     try {
-      const ai = getGeminiClient();
-      const model = 'gemini-2.5-flash';
-      const stockContext = buildStockContext(stock);
-
-      const prompt = `Identifique esta planta e devolva a ficha de cadastro completa em JSON, em Português do Brasil.
-
-Escolha a melhor opção possível para todos os campos abaixo, priorizando materiais que já existem no estoque.
-Quando realmente não for possível inferir algo pela foto, use exatamente "-".
-
-Opções aceitas:
-- status: ${PLANT_STATUS_OPTIONS.join(', ')}
-- wateringFrequency: ${WATERING_OPTIONS.join(', ')}
-- potSize: ${POT_OPTIONS.join(', ')}
-- substrate: ${SUBSTRATE_OPTIONS.join(', ')}
-- drainage: ${DRAINAGE_OPTIONS.join(', ')}
-- filterMaterial: ${FILTER_OPTIONS.join(', ')}
-
-Estoque atual: ${stockContext}.
-
-Campos livres (podem receber "-" se não der para inferir): species, notes, substrateMix, drainageLayer.
-
-No campo stockSuggestions, explique objetivamente por que a escolha combina com o estoque disponível e qual item usar primeiro.`;
-
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inlineData: { data: base64Image.split(',')[1], mimeType: 'image/jpeg' } }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING, description: 'Nome comum da planta' },
-              species: { type: Type.STRING, description: 'Nome científico ou -' },
-              status: { type: Type.STRING, description: 'Status inicial da planta' },
-              wateringFrequency: { type: Type.STRING, description: 'Frequência de rega (Diária, Semanal, Quinzenal ou Mensal)' },
-              notes: { type: Type.STRING, description: 'Dica de cuidado ou -' },
-              potSize: { type: Type.STRING, description: 'Tamanho de vaso sugerido' },
-              substrate: { type: Type.STRING, description: 'Substrato principal sugerido' },
-              substrateMix: { type: Type.STRING, description: 'Mistura complementar ou -' },
-              drainage: { type: Type.STRING, description: 'Material principal de drenagem' },
-              drainageLayer: { type: Type.STRING, description: 'Detalhe da camada de drenagem ou -' },
-              filterMaterial: { type: Type.STRING, description: 'Material de filtragem sugerido' },
-              stockSuggestions: { type: Type.STRING, description: 'Resumo do melhor uso do estoque para esta planta' }
-            },
-            required: ['name', 'species', 'status', 'wateringFrequency', 'notes', 'potSize', 'substrate', 'substrateMix', 'drainage', 'drainageLayer', 'filterMaterial', 'stockSuggestions']
-          }
-        }
-      });
-
-      const data = JSON.parse(response.text || '{}');
-      setPlantData({
-        name: normalizeChoice(data.name),
-        species: normalizeChoice(data.species),
-        status: (PLANT_STATUS_OPTIONS.includes(data.status) ? data.status : 'Saudável') as Plant['status'],
-        wateringFrequency: WATERING_OPTIONS.includes(data.wateringFrequency) ? data.wateringFrequency : 'Semanal',
-        notes: normalizeChoice(data.notes),
-        potSize: matchSelectOption(data.potSize, POT_OPTIONS),
-        substrate: matchSelectOption(data.substrate, SUBSTRATE_OPTIONS),
-        substrateMix: normalizeChoice(data.substrateMix),
-        drainage: matchSelectOption(data.drainage, DRAINAGE_OPTIONS),
-        drainageLayer: normalizeChoice(data.drainageLayer),
-        filterMaterial: matchSelectOption(data.filterMaterial, FILTER_OPTIONS),
-        stockSuggestions: normalizeChoice(data.stockSuggestions),
-      });
-      try {
-        const lightAnalysis = await analyzeLightWithAI(base64Image);
-        setLightMeasurement(lightAnalysis);
-      } catch (lightErr) {
-        console.error(lightErr);
-        setLightMeasurement(null);
-      }
-    } catch (err: any) {
-      console.error(err);
-      setError(getGeminiErrorMessage(err, 'Erro ao identificar a planta. Tente uma foto mais clara.'));
+      const lightAnalysis = await analyzeLightWithAI(base64Image);
+      setLightMeasurement(lightAnalysis);
+      setPlantData(identifyPlantLocally(lightAnalysis, stock));
+      setError('A identificação por foto agora usa IA local básica. Revise manualmente a ficha antes de salvar.');
     } finally {
       setIdentifying(false);
     }
@@ -3468,10 +3712,12 @@ No campo stockSuggestions, explique objetivamente por que a escolha combina com 
       substrate: normalizeChoice(plantData.substrate),
       drainage: normalizeChoice(plantData.drainage),
       filterMaterial: normalizeChoice(plantData.filterMaterial),
-      isFavorite: false
+      isFavorite: false,
+      createdAt: new Date().toISOString(),
+      photoHistory: image ? [createPhotoEntry(image, 'Registro inicial por identificação', 'Identificação')] : []
     };
 
-    addPlant(newPlant);
+    addPlant(normalizePlantRecord(newPlant));
     addToHistory({
       type: 'Identificação',
       title: newPlant.name,
@@ -3508,9 +3754,11 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
       substrateMix: normalizeChoice(manualPlant.substrateMix),
       drainageLayer: normalizeChoice(manualPlant.drainageLayer),
       isFavorite: false,
+      createdAt: new Date().toISOString(),
+      photoHistory: manualPlant.image ? [createPhotoEntry(manualPlant.image, 'Registro inicial manual', 'Cadastro manual')] : []
     };
 
-    addPlant(newPlant);
+    addPlant(normalizePlantRecord(newPlant));
     addToHistory({
       type: 'Atualização',
       title: `Cadastro manual: ${newPlant.name}`,
@@ -3784,6 +4032,15 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
             <textarea value={manualPlant.notes || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })} className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none" placeholder="Cuidados, histórico, origem da muda ou -" />
           </div>
 
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Foto manual da planta</label>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
+              <Camera className="w-4 h-4" /> Adicionar foto
+              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualImage} />
+            </label>
+            {manualPlant.image && <img src={manualPlant.image} alt="Planta manual" className="w-full h-48 object-cover rounded-2xl border border-slate-200" />}
+          </div>
+
           <StockSuggestionPanel
             summary={manualStockSuggestion}
             items={manualStockBundle.items}
@@ -3798,7 +4055,7 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
             </button>
             <button
               onClick={() => { setManualPlant({
-                name: '', species: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION
+                name: '', species: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION, image: ''
               }); setStockMessage(null); }}
               className="sm:w-48 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
             >
@@ -3880,7 +4137,7 @@ function SettingsView({ settings, saveSettings, setSettings, data }: any) {
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-8">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 mb-2">IA neste dispositivo</h2>
-          <p className="text-slate-500">Cole sua chave do Gemini aqui para liberar identificação, diagnóstico, medidor de luz, sementes e dicas do botânico IA sem depender de Firebase.</p>
+          <p className="text-slate-500">A chave do Gemini agora é opcional e usada só para textos curtos do jardim. Reconhecimento por imagem, diagnóstico visual e medição de luz rodam localmente em modo básico.</p>
         </div>
 
         <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
@@ -4158,109 +4415,162 @@ function GardenSummary({ plants, locations }: any) {
   );
 }
 
-function SpecialistTips({ plants, locations, weather, forecast }: any) {
-  const [tip, setTip] = useState<string>("Carregando dica personalizada...");
-  const [details, setDetails] = useState<string | null>(null);
+function SpecialistTips({ plants, locations, weather, forecast, tasks, germinations, stock, history }: any) {
+  const [insights, setInsights] = useState<DailyGardenInsights | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const generateTip = async () => {
-      if (plants.length === 0) {
-        setTip("Adicione sua primeira planta para receber dicas personalizadas!");
+    const run = async () => {
+      const local = generateLocalInsights(plants, locations, weather, forecast, germinations, tasks, stock, history);
+      const cacheKey = getInsightsCacheKey(local.dayKey);
+      let cached: DailyGardenInsights | null = null;
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        cached = raw ? JSON.parse(raw) as DailyGardenInsights : null;
+      } catch {
+        cached = null;
+      }
+      if (cached) {
+        setInsights({ ...cached, source: 'cache' });
+        return;
+      }
+
+      if (!plants.length) {
+        localStorage.setItem(cacheKey, JSON.stringify(local));
+        setInsights(local);
+        return;
+      }
+
+      const apiKey = getSavedGeminiKey();
+      if (!apiKey) {
+        localStorage.setItem(cacheKey, JSON.stringify(local));
+        setInsights(local);
         return;
       }
 
       setLoading(true);
       try {
         const ai = getGeminiClient();
-        const model = "gemini-2.5-flash";
-        
-        const plantsInfo = plants.slice(0, 10).map((p: any) => {
-          const loc = locations.find((l: any) => l.id === p.locationId)?.name || 'Desconhecido';
-          return `${p.name} (${p.species || 'Espécie não informada'}) em ${loc}`;
-        }).join(', ');
-
-        const weatherInfo = weather ? `Clima atual: ${weather.temp}°C, ${weather.condition}.` : '';
-        const forecastInfo = forecast ? `Previsão para amanhã: máxima ${forecast.tempMax}°C, mínima ${forecast.tempMin}°C, ${forecast.condition}.` : '';
-
-        const prompt = `Você é um botânico especialista. Com base nestas plantas: ${plantsInfo}. E no clima: ${weatherInfo} ${forecastInfo}. 
-        Dê uma dica resumida (máximo 150 caracteres) e uma explicação detalhada de cuidados para cada planta ou grupo de plantas. 
-        Responda em JSON com os campos "summary" e "details".`;
-
+        const model = 'gemini-2.5-flash';
+        const context = buildMiniGardenContext(plants, locations, weather, forecast, germinations, tasks, stock, history);
         const response = await ai.models.generateContent({
           model,
-          contents: [{ parts: [{ text: prompt }] }],
-          config: { 
-            responseMimeType: "application/json",
+          contents: [{ parts: [{ text: buildGeminiInsightsPrompt(context) }] }],
+          config: {
+            responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                summary: { type: Type.STRING },
-                details: { type: Type.STRING }
+                botanistOfDay: { type: Type.STRING },
+                priorities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                checklist: { type: Type.ARRAY, items: { type: Type.STRING } },
+                maintenanceAdvice: { type: Type.STRING },
+                routineTips: { type: Type.STRING },
+                riskAnalysis: { type: Type.STRING },
+                germinationGuidance: { type: Type.STRING },
+                repotAdvice: { type: Type.STRING },
+                climateManagement: { type: Type.STRING },
+                weeklyReview: { type: Type.STRING },
+                newPlantsAdvice: { type: Type.STRING },
+                oldPlantsAdvice: { type: Type.STRING },
+                stockMixAdvice: { type: Type.STRING },
+                report: { type: Type.STRING }
               },
-              required: ["summary", "details"]
+              required: ['botanistOfDay', 'priorities', 'checklist', 'maintenanceAdvice', 'routineTips', 'riskAnalysis', 'germinationGuidance', 'repotAdvice', 'climateManagement', 'weeklyReview', 'newPlantsAdvice', 'oldPlantsAdvice', 'stockMixAdvice', 'report']
             }
           }
         });
-
-        const data = JSON.parse(response.text || "{}");
-        setTip(data.summary || "Mantenha suas plantas hidratadas e observe sinais de pragas.");
-        setDetails(data.details || null);
+        const data = JSON.parse(response.text || '{}');
+        const merged: DailyGardenInsights = {
+          ...local,
+          source: 'gemini',
+          botanistOfDay: normalizeChoice(data.botanistOfDay) === UNKNOWN_OPTION ? local.botanistOfDay : normalizeChoice(data.botanistOfDay),
+          priorities: Array.isArray(data.priorities) && data.priorities.length ? data.priorities.slice(0, 3).map((item: string) => normalizeChoice(item)).filter((item: string) => item !== UNKNOWN_OPTION) : local.priorities,
+          checklist: Array.isArray(data.checklist) && data.checklist.length ? data.checklist.slice(0, 5).map((item: string) => normalizeChoice(item)).filter((item: string) => item !== UNKNOWN_OPTION) : local.checklist,
+          maintenanceAdvice: normalizeChoice(data.maintenanceAdvice) === UNKNOWN_OPTION ? local.maintenanceAdvice : normalizeChoice(data.maintenanceAdvice),
+          routineTips: normalizeChoice(data.routineTips) === UNKNOWN_OPTION ? local.routineTips : normalizeChoice(data.routineTips),
+          riskAnalysis: normalizeChoice(data.riskAnalysis) === UNKNOWN_OPTION ? local.riskAnalysis : normalizeChoice(data.riskAnalysis),
+          germinationGuidance: normalizeChoice(data.germinationGuidance) === UNKNOWN_OPTION ? local.germinationGuidance : normalizeChoice(data.germinationGuidance),
+          repotAdvice: normalizeChoice(data.repotAdvice) === UNKNOWN_OPTION ? local.repotAdvice : normalizeChoice(data.repotAdvice),
+          climateManagement: normalizeChoice(data.climateManagement) === UNKNOWN_OPTION ? local.climateManagement : normalizeChoice(data.climateManagement),
+          weeklyReview: normalizeChoice(data.weeklyReview) === UNKNOWN_OPTION ? local.weeklyReview : normalizeChoice(data.weeklyReview),
+          newPlantsAdvice: normalizeChoice(data.newPlantsAdvice) === UNKNOWN_OPTION ? local.newPlantsAdvice : normalizeChoice(data.newPlantsAdvice),
+          oldPlantsAdvice: normalizeChoice(data.oldPlantsAdvice) === UNKNOWN_OPTION ? local.oldPlantsAdvice : normalizeChoice(data.oldPlantsAdvice),
+          stockMixAdvice: normalizeChoice(data.stockMixAdvice) === UNKNOWN_OPTION ? local.stockMixAdvice : normalizeChoice(data.stockMixAdvice),
+          report: normalizeChoice(data.report) === UNKNOWN_OPTION ? local.report : normalizeChoice(data.report),
+        };
+        localStorage.setItem(cacheKey, JSON.stringify(merged));
+        setInsights(merged);
       } catch (error) {
-        console.error("Erro ao gerar dica:", error);
-        setTip(error instanceof Error && error.message === "missing-gemini-key" ? "Cadastre sua chave do Gemini em Configurações > IA para receber dicas personalizadas." : "Verifique a umidade do solo e garanta luz adequada para suas plantas.");
+        console.error('Erro ao gerar insights diários:', error);
+        localStorage.setItem(cacheKey, JSON.stringify(local));
+        setInsights(local);
       } finally {
         setLoading(false);
       }
     };
 
-    generateTip();
-  }, [plants, locations, weather, forecast]);
+    run();
+  }, [plants, locations, weather, forecast, tasks, germinations, stock, history]);
+
+  if (!insights) {
+    return <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm h-full flex items-center justify-center text-slate-500">Carregando botânico do dia...</div>;
+  }
 
   return (
-    <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm h-full flex flex-col">
-      <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-        <AlertCircle className="text-amber-500" /> Dicas do Especialista
-      </h3>
-      <div className="flex-1 flex flex-col">
-        <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl text-amber-900 leading-relaxed mb-4">
-          {loading ? (
-            <div className="flex items-center gap-2 text-amber-600 animate-pulse">
-              <RefreshCw className="w-4 h-4 animate-spin" /> Gerando dica personalizada...
-            </div>
-          ) : (
-            `"${tip}"`
-          )}
+    <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm h-full flex flex-col gap-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-xl font-bold flex items-center gap-2"><AlertCircle className="text-amber-500" /> Botânico do Dia</h3>
+          <p className="text-sm text-slate-500 mt-1">Clima e texto do dia usam cache. O Gemini só entra em uma chamada curta por dia, quando houver chave.</p>
         </div>
-        
-        {details && !loading && (
-          <div className="mt-auto">
-            <button 
-              onClick={() => setShowDetails(!showDetails)}
-              className="text-amber-600 font-bold text-sm flex items-center gap-1 hover:underline"
-            >
-              {showDetails ? 'Ver menos' : 'Ver mais detalhes'}
-              <ChevronRight className={`w-4 h-4 transition-transform ${showDetails ? 'rotate-90' : ''}`} />
-            </button>
-            
-            <AnimatePresence>
-              {showDetails && (
-                <motion.div 
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="mt-4 p-4 bg-slate-50 rounded-2xl text-sm text-slate-600 border border-slate-100 whitespace-pre-wrap">
-                    {details}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
+        <span className={`rounded-full px-3 py-1 text-xs font-bold ${insights.source === 'gemini' ? 'bg-emerald-100 text-emerald-700' : insights.source === 'cache' ? 'bg-slate-100 text-slate-700' : 'bg-blue-100 text-blue-700'}`}>
+          {insights.source === 'gemini' ? 'Gemini em texto curto' : insights.source === 'cache' ? 'Cache do dia' : 'Modo local'}
+        </span>
       </div>
+      <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4 text-amber-900 leading-relaxed">{loading ? <div className="flex items-center gap-2 text-amber-600 animate-pulse"><RefreshCw className="w-4 h-4 animate-spin" /> Gerando a análise do dia...</div> : insights.botanistOfDay}</div>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-slate-200 p-4 bg-slate-50">
+          <div className="font-bold text-slate-900 mb-3 flex items-center gap-2"><ClipboardList className="w-4 h-4 text-emerald-600" /> Prioridade de Hoje</div>
+          <div className="space-y-2">{insights.priorities.map((item, index) => <div key={index} className="text-sm text-slate-700">{index + 1}. {item}</div>)}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 p-4 bg-slate-50">
+          <div className="font-bold text-slate-900 mb-3 flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-blue-600" /> Checklist Inteligente</div>
+          <div className="space-y-2">{insights.checklist.map((item, index) => <div key={index} className="text-sm text-slate-700">• {item}</div>)}</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <InsightPanel icon={Heart} title="Conselhos de Manutenção" text={insights.maintenanceAdvice} />
+        <InsightPanel icon={Calendar} title="Dicas de Rotina do Dia" text={insights.routineTips} />
+        <InsightPanel icon={AlertCircle} title="Análise de Risco" text={insights.riskAnalysis} />
+        <InsightPanel icon={Sprout} title="Orientação para Germinação" text={insights.germinationGuidance} />
+        <InsightPanel icon={Layers} title="Ajuda para Replantio" text={insights.repotAdvice} />
+        <InsightPanel icon={Cloud} title="Manejo por Estação / Clima" text={insights.climateManagement} />
+        <InsightPanel icon={History} title="Revisão Semanal" text={insights.weeklyReview} />
+        <InsightPanel icon={Package} title="Uso Inteligente do Estoque" text={insights.stockMixAdvice} />
+      </div>
+      <button onClick={() => setShowDetails(!showDetails)} className="text-emerald-600 font-bold text-sm flex items-center gap-1 hover:underline self-start">{showDetails ? 'Ocultar blocos extras' : 'Ver blocos extras'}<ChevronRight className={`w-4 h-4 transition-transform ${showDetails ? 'rotate-90' : ''}`} /></button>
+      <AnimatePresence>
+        {showDetails && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-2xl border border-slate-200 p-4 bg-white"><div className="font-bold text-slate-900 mb-2">Conselhos para plantas novas</div><div className="text-sm text-slate-600 whitespace-pre-wrap">{insights.newPlantsAdvice}</div></div>
+              <div className="rounded-2xl border border-slate-200 p-4 bg-white"><div className="font-bold text-slate-900 mb-2">Conselhos para plantas antigas</div><div className="text-sm text-slate-600 whitespace-pre-wrap">{insights.oldPlantsAdvice}</div></div>
+              <div className="rounded-2xl border border-slate-200 p-4 bg-white md:col-span-2"><div className="font-bold text-slate-900 mb-2 flex items-center gap-2"><FileText className="w-4 h-4 text-slate-500" /> Texto explicativo do app</div><div className="text-sm text-slate-600 whitespace-pre-wrap">{insights.report}</div></div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function InsightPanel({ icon: Icon, title, text }: { icon: any, title: string, text: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 p-4 bg-white">
+      <div className="font-bold text-slate-900 mb-2 flex items-center gap-2"><Icon className="w-4 h-4 text-emerald-600" /> {title}</div>
+      <div className="text-sm text-slate-600 whitespace-pre-wrap">{text}</div>
     </div>
   );
 }
@@ -4275,8 +4585,18 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
 
 
   const handleSave = () => {
-    if (onUpdate) onUpdate(editData);
+    if (onUpdate) onUpdate(normalizePlantRecord(editData));
     setIsEditing(false);
+  };
+
+  const handleEditImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setEditData(prev => attachPhotoToPlant(normalizePlantRecord(prev), reader.result as string, 'Evolução registrada manualmente', 'Acompanhamento'));
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleRepotClick = () => {
@@ -4342,6 +4662,9 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
               <div className="flex items-center gap-2 text-sm text-slate-600">
                 <RefreshCw className="w-4 h-4 text-blue-500" /> Replantio: {plant.lastRepotted ? new Date(plant.lastRepotted).toLocaleDateString() : 'Nunca'}
               </div>
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <History className="w-4 h-4 text-violet-500" /> Vida no jardim: {getPlantLifeLabel(plant.createdAt)}
+              </div>
 
               <div className="mt-4 pt-4 border-t border-slate-100 space-y-2">
                 <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Especificações</div>
@@ -4357,6 +4680,21 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
                 <div className="flex items-center gap-2 text-xs text-slate-600">
                   <FileText className="w-3.5 h-3.5 text-slate-400" /> Material Filtragem: {plant.filterMaterial || '---'}
                 </div>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Histórico de fotos</div>
+                <div className="text-xs text-slate-500">{plant.photoHistory?.length || (plant.image ? 1 : 0)} registro(s)</div>
+              </div>
+              <div className="flex gap-3 overflow-x-auto pb-1">
+                {(plant.photoHistory?.length ? plant.photoHistory : plant.image ? [createPhotoEntry(plant.image, 'Foto principal atual', 'Cadastro', plant.createdAt)] : []).map((entry) => (
+                  <div key={entry.id} className="min-w-[96px] max-w-[96px]">
+                    <img src={entry.image} alt={entry.note || plant.name} className="h-24 w-24 object-cover rounded-2xl border border-slate-200" />
+                    <div className="mt-1 text-[10px] text-slate-500 leading-tight">{new Date(entry.date).toLocaleDateString()}</div>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -4502,6 +4840,15 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
               />
             </div>
 
+            <div className="space-y-2">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Foto manual / evolução</label>
+              <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
+                <Camera className="w-4 h-4" /> Adicionar foto de evolução
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleEditImage} />
+              </label>
+              {editData.image && <img src={editData.image} alt={editData.name} className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
+            </div>
+
             <div className="flex flex-col gap-2 pt-4">
               <button
                 onClick={handleSave}
@@ -4603,53 +4950,8 @@ function SeedIdentifyView({ stock, onStartGermination, addToHistory }: { stock: 
     setError(null);
     setConfirmed(false);
     try {
-      const ai = getGeminiClient();
-      const model = "gemini-2.5-flash";
-      
-      const stockList = stock.map(s => `${s.name} (${s.quantity} ${s.unit})`).join(", ");
-      const prompt = `Identifique a semente nesta embalagem. Forneça instruções detalhadas de plantio (profundidade, espaçamento, luz e rega), além de técnicas práticas de germinação.
-      Inclua técnicas como hidratação, escarificação, pré-resfriamento, uso de papel toalha, cobertura leve do substrato e umidade ideal, mas apenas quando realmente fizer sentido para a espécie.
-      Além disso, veja a lista de materiais em estoque abaixo e sugira como usá-los para o plantio (ex: qual substrato usar, se precisa de fertilizante disponível, etc).
-      Estoque atual: ${stockList || "Nenhum material em estoque"}.
-      MUITO IMPORTANTE: Verifique se esta semente específica se beneficia de uma hidratação prévia com água morna (quebra de dormência). Se sim, forneça as instruções de como fazer.
-      Responda em Português do Brasil em formato JSON.`;
-      
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inlineData: { data: base64Image.split(',')[1], mimeType: "image/jpeg" } }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING, description: "Nome da semente" },
-              species: { type: Type.STRING, description: "Nome científico se possível" },
-              plantingInstructions: { type: Type.STRING, description: "Instruções de plantio" },
-              stockSuggestions: { type: Type.STRING, description: "Sugestões baseadas no estoque" },
-              estimatedGerminationDays: { type: Type.NUMBER, description: "Dias estimados para germinação" },
-              warmWaterHydration: { type: Type.BOOLEAN, description: "Se a semente se beneficia de hidratação com água morna" },
-              hydrationInstructions: { type: Type.STRING, description: "Instruções de hidratação se aplicável" },
-              germinationTechniques: { type: Type.STRING, description: "Técnicas de germinação recomendadas para esta semente" },
-              recommendedLight: { type: Type.STRING, description: "Luz ideal para a germinação" },
-              wateringTips: { type: Type.STRING, description: "Rega ideal durante a germinação" }
-            },
-            required: ["name", "plantingInstructions", "stockSuggestions", "estimatedGerminationDays", "warmWaterHydration", "germinationTechniques", "recommendedLight", "wateringTips"]
-          }
-        }
-      });
-
-      const data = JSON.parse(response.text || "{}");
-      setSeedData(data);
-    } catch (err: any) {
-      console.error(err);
-      setError(getGeminiErrorMessage(err, "Erro ao identificar a semente. Tente uma foto mais clara da embalagem."));
+      setSeedData(identifySeedLocally(stock));
+      setError('A identificação por foto agora usa IA local básica. Revise manualmente antes de iniciar a germinação.');
     } finally {
       setIdentifying(false);
     }
@@ -4664,7 +4966,7 @@ function SeedIdentifyView({ stock, onStartGermination, addToHistory }: { stock: 
     >
       <div className="text-center">
         <h2 className="text-3xl font-bold text-slate-900 mb-2">Identificador de Sementes</h2>
-        <p className="text-slate-500">Identifique a embalagem e receba dicas personalizadas com base no seu estoque.</p>
+        <p className="text-slate-500">Identifique a embalagem e receba dicas personalizadas com base no seu estoque. Quando necessário, o app usa uma análise local básica para você continuar.</p>
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
