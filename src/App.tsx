@@ -96,6 +96,7 @@ interface StockItem {
   usageTags?: string[];
   notes?: string;
   image?: string;
+  locationId?: string;
 }
 
 interface Germination {
@@ -117,6 +118,7 @@ interface Germination {
   wateringTips?: string;
   transferredPlantId?: string;
   transferredAt?: string;
+  locationId?: string;
 }
 
 interface HistoryItem {
@@ -163,6 +165,20 @@ interface ForecastData {
   tempMin: number;
   condition: string;
   rainProb: number;
+}
+
+interface RankedLocationMatch {
+  id: string;
+  name: string;
+  score: number;
+  label: 'Ideal' | 'Boa opção' | 'Atenção';
+  reason: string;
+}
+
+interface EnvironmentRecommendation {
+  best?: RankedLocationMatch;
+  current?: RankedLocationMatch;
+  ranked: RankedLocationMatch[];
 }
 
 interface LightAnalysisResult {
@@ -294,6 +310,41 @@ const normalizePlantRecord = (plant: Partial<Plant>): Plant => {
     photoHistory,
   };
 };
+
+const normalizeStockRecord = (item: Partial<StockItem>): StockItem => ({
+  id: item.id || makeId(),
+  name: item.name || 'Item sem nome',
+  quantity: Number(item.quantity || 0),
+  unit: normalizeChoice(item.unit || 'un'),
+  minQuantity: Number(item.minQuantity || 0),
+  category: item.category || 'Outros',
+  usageTags: inferStockUsageTags(item as StockItem),
+  notes: item.notes || '',
+  image: item.image || '',
+  locationId: item.locationId || '',
+});
+
+const normalizeGerminationRecord = (item: Partial<Germination>): Germination => ({
+  id: item.id || makeId(),
+  name: item.name || 'Semente sem nome',
+  species: item.species || '',
+  startDate: item.startDate || new Date().toISOString(),
+  expectedDays: Number(item.expectedDays || 7),
+  status: (item.status as Germination['status']) || 'Em andamento',
+  notes: item.notes || '',
+  lastWatered: item.lastWatered || '',
+  hydratedWithWarmWater: !!item.hydratedWithWarmWater,
+  image: item.image || '',
+  plantingInstructions: item.plantingInstructions || '',
+  stockSuggestions: item.stockSuggestions || '',
+  germinationTechniques: item.germinationTechniques || '',
+  hydrationInstructions: item.hydrationInstructions || '',
+  recommendedLight: item.recommendedLight || '',
+  wateringTips: item.wateringTips || '',
+  transferredPlantId: item.transferredPlantId || '',
+  transferredAt: item.transferredAt || '',
+  locationId: item.locationId || '',
+});
 
 const attachPhotoToPlant = (plant: Plant, image?: string | null, note = 'Atualização visual', source = 'Manual'): Plant => {
   if (!image) return normalizePlantRecord(plant);
@@ -526,6 +577,104 @@ const normalizeSunPeriod = (value?: string | null) => {
   return 'Parcial';
 };
 
+
+const lightScore = (desired: string[], actual?: string | null) => {
+  const level = normalizeLightLevel(actual);
+  if (desired.includes(level)) return 28;
+  const broadMap: Record<string, string[]> = {
+    'Sol Pleno': ['Sol Parcial'],
+    'Sol Parcial': ['Sol Pleno', 'Meia Sombra'],
+    'Meia Sombra': ['Sol Parcial', 'Luz Indireta'],
+    'Luz Indireta': ['Meia Sombra', 'Sombra'],
+    'Sombra': ['Luz Indireta'],
+  };
+  return desired.some(target => (broadMap[target] || []).includes(level)) ? 16 : 4;
+};
+
+const describeRank = (score: number): RankedLocationMatch['label'] => score >= 78 ? 'Ideal' : score >= 58 ? 'Boa opção' : 'Atenção';
+
+const buildPlantProfile = (plant: Partial<Plant>) => {
+  const combined = `${plant.name || ''} ${plant.species || ''} ${plant.notes || ''}`.toLowerCase();
+  let preferredLights = ['Meia Sombra', 'Luz Indireta'];
+  if (/aloe|babosa|cacto|suculent|crassula|echeveria|agave|onze-horas|rosa do deserto/.test(combined)) preferredLights = ['Sol Pleno', 'Sol Parcial'];
+  if (/jiboia|philodend|filodendro|samambaia|calathea|maranta|lírio|lirio|spathiphyllum|zamioculca|anturio|costela/.test(combined)) preferredLights = ['Meia Sombra', 'Luz Indireta'];
+  if (/manjeric|alecrim|lavanda|tomilho|salsa|hortelã|hortela|basil/.test(combined)) preferredLights = ['Sol Pleno', 'Sol Parcial'];
+  const fragile = ['Recuperação', 'Muda'].includes((plant.status || '') as string) || /muda|estaca|recupera/.test(combined);
+  const water = plant.wateringFrequency || '';
+  const preferCovered = fragile || /Diária|Semanal/.test(water);
+  const avoidRain = fragile || /indireta|sombra/.test(preferredLights.join(' '));
+  return { preferredLights, preferCovered, avoidRain, preferMorningOnly: fragile };
+};
+
+const getPlantEnvironmentRecommendation = (plant: Partial<Plant>, locations: Location[]): EnvironmentRecommendation => {
+  const profile = buildPlantProfile(plant);
+  const ranked = locations.map(location => {
+    let score = 42 + lightScore(profile.preferredLights, location.light);
+    const reasons = [`luz ${normalizeLightLevel(location.light)}`];
+    if (profile.preferCovered) {
+      if (location.covered) { score += 12; reasons.push('local coberto'); } else { score -= 12; reasons.push('muito exposto'); }
+    }
+    if (profile.avoidRain) {
+      if (location.receivesRain) { score -= 12; reasons.push('recebe chuva'); } else { score += 8; reasons.push('protegido da chuva'); }
+    }
+    if (profile.preferMorningOnly) {
+      const sun = normalizeSunPeriod(location.sunPeriod);
+      if (sun === 'Manhã' || sun === 'Não recebe sol direto' || sun === 'Parcial') score += 8;
+      if (sun === 'Dia inteiro') { score -= 10; reasons.push('sol longo para adaptação'); }
+    }
+    if ((plant.wateringFrequency || '') === 'Mensal' || (plant.wateringFrequency || '') === 'Quinzenal') {
+      if (normalizeLightLevel(location.light) === 'Sol Pleno' || normalizeLightLevel(location.light) === 'Sol Parcial') score += 4;
+    }
+    score = Math.max(0, Math.min(100, score));
+    return { id: location.id, name: location.name, score, label: describeRank(score), reason: reasons.join(' • ') };
+  }).sort((a,b)=>b.score-a.score);
+  return { best: ranked[0], current: ranked.find(item => item.id === plant.locationId), ranked };
+};
+
+const getSeedEnvironmentRecommendation = (germination: Partial<Germination>, locations: Location[]): EnvironmentRecommendation => {
+  const combined = `${germination.name || ''} ${germination.species || ''} ${germination.notes || ''} ${germination.recommendedLight || ''}`.toLowerCase();
+  const prefersBrightIndirect = !/sol pleno|dia inteiro/.test(combined);
+  const ranked = locations.map(location => {
+    let score = 38;
+    const reasons: string[] = [];
+    const light = normalizeLightLevel(location.light);
+    if (prefersBrightIndirect) {
+      if (['Luz Indireta', 'Meia Sombra', 'Sol Parcial'].includes(light)) { score += 28; reasons.push(`luz ${light.toLowerCase()}`); }
+      else { score -= 12; reasons.push(`luz ${light.toLowerCase()}`); }
+    }
+    if (location.covered) { score += 14; reasons.push('local coberto'); } else { score -= 16; reasons.push('exposição alta'); }
+    if (location.receivesRain) { score -= 14; reasons.push('chuva pode atrapalhar a germinação'); } else { score += 10; reasons.push('proteção contra chuva'); }
+    const sun = normalizeSunPeriod(location.sunPeriod);
+    if (sun === 'Dia inteiro') score -= 8;
+    score = Math.max(0, Math.min(100, score));
+    return { id: location.id, name: location.name, score, label: describeRank(score), reason: reasons.join(' • ') };
+  }).sort((a,b)=>b.score-a.score);
+  return { best: ranked[0], current: ranked.find(item => item.id === germination.locationId), ranked };
+};
+
+const getStockEnvironmentRecommendation = (item: Partial<StockItem>, locations: Location[]): EnvironmentRecommendation => {
+  const combined = `${item.name || ''} ${item.category || ''} ${item.notes || ''} ${(item.usageTags || []).join(' ')}`.toLowerCase();
+  const keepDry = /substrato|solo|adubo|fertiliz|semente|muda|ferramenta|papel|vaso|germina/.test(combined);
+  const avoidSun = /semente|muda|fertiliz|substrato|defensivo/.test(combined);
+  const ranked = locations.map(location => {
+    let score = 40;
+    const reasons: string[] = [];
+    const light = normalizeLightLevel(location.light);
+    if (keepDry) {
+      if (location.covered) { score += 16; reasons.push('local coberto'); } else { score -= 16; reasons.push('exposto ao tempo'); }
+      if (location.receivesRain) { score -= 16; reasons.push('recebe chuva'); } else { score += 10; reasons.push('melhor para armazenamento'); }
+    }
+    if (avoidSun) {
+      if (['Luz Indireta', 'Meia Sombra', 'Sombra'].includes(light)) { score += 14; reasons.push(`luz ${light.toLowerCase()}`); }
+      else { score -= 10; reasons.push('sol pode aquecer a embalagem'); }
+    } else if (/vaso|ferramenta|suporte/.test(combined) && location.covered) {
+      score += 6;
+    }
+    score = Math.max(0, Math.min(100, score));
+    return { id: location.id, name: location.name, score, label: describeRank(score), reason: reasons.join(' • ') };
+  }).sort((a,b)=>b.score-a.score);
+  return { best: ranked[0], current: ranked.find(item2 => item2.id === item.locationId), ranked };
+};
 
 const DAILY_INSIGHTS_CACHE_PREFIX = 'atena_garden_daily_insights_v11';
 const WEATHER_CACHE_PREFIX = 'atena_garden_weather_cache_v11';
@@ -1007,7 +1156,8 @@ export default function App() {
     setLoadingWeather(true);
     const currentSettings = forceSettings || settings;
     const dayKey = getDayKey();
-    const cacheKey = getWeatherCacheKey(currentSettings);
+    const manualAddress = (currentSettings.gardenAddress || '').trim();
+    const cacheKey = getWeatherCacheKey({ ...currentSettings, gardenAddress: manualAddress });
     const cachedWeather = safeJsonParse<any>(localStorage.getItem(cacheKey), null);
     if (cachedWeather?.dayKey === dayKey && cachedWeather?.weather && cachedWeather?.forecast) {
       setWeather(cachedWeather.weather);
@@ -1016,21 +1166,29 @@ export default function App() {
       return;
     }
 
+    const weatherCodeMap: Record<number, string> = {
+      0: 'Céu Limpo', 1: 'Principalmente Limpo', 2: 'Parcialmente Nublado', 3: 'Nublado',
+      45: 'Nevoeiro', 48: 'Nevoeiro com geada', 51: 'Garoa Leve', 61: 'Chuva Leve',
+      80: 'Pancadas de Chuva', 95: 'Trovoada'
+    };
+
     const persistWeather = (nextWeather: WeatherData, nextForecast: ForecastData) => {
       setWeather(nextWeather);
       setForecast(nextForecast);
       localStorage.setItem(cacheKey, JSON.stringify({ dayKey, weather: nextWeather, forecast: nextForecast }));
     };
 
+    const applyTemporaryWeather = (nextWeather: WeatherData, nextForecast: ForecastData) => {
+      setWeather(nextWeather);
+      setForecast(nextForecast);
+    };
+
+    const buildFallbackForecast = (): ForecastData => ({ tempMax: 27, tempMin: 20, condition: 'Variável', rainProb: 10 });
+
     const getWeatherData = async (latitude: number, longitude: number, label: string) => {
       try {
         const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`);
         const data = await response.json();
-        const weatherCodeMap: Record<number, string> = {
-          0: 'Céu Limpo', 1: 'Principalmente Limpo', 2: 'Parcialmente Nublado', 3: 'Nublado',
-          45: 'Nevoeiro', 48: 'Nevoeiro com geada', 51: 'Garoa Leve', 61: 'Chuva Leve',
-          80: 'Pancadas de Chuva', 95: 'Trovoada'
-        };
         const nextWeather: WeatherData = {
           temp: Math.round(data.current.temperature_2m),
           condition: weatherCodeMap[data.current.weather_code] || 'Variável',
@@ -1048,38 +1206,59 @@ export default function App() {
         persistWeather(nextWeather, nextForecast);
       } catch (e) {
         console.error('Weather fetch error', e);
+        applyTemporaryWeather(
+          { temp: 25, condition: 'Clima indisponível', humidity: 50, wind: 0, rainProb: 0, locationName: label },
+          buildFallbackForecast()
+        );
       } finally {
         setLoadingWeather(false);
       }
     };
 
-    if (currentSettings.weatherMode === 'manual' && currentSettings.gardenAddress) {
+    if (currentSettings.weatherMode === 'manual') {
+      if (!manualAddress) {
+        applyTemporaryWeather(
+          { temp: 25, condition: 'Endereço manual pendente', humidity: 50, wind: 0, rainProb: 0, locationName: 'Salve um endereço do jardim' },
+          buildFallbackForecast()
+        );
+        setLoadingWeather(false);
+        return;
+      }
       try {
-        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(currentSettings.gardenAddress)}&count=1&language=pt&format=json`);
+        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(manualAddress)}&count=1&language=pt&format=json`);
         const geoData = await geoRes.json();
         if (geoData.results && geoData.results.length > 0) {
           const { latitude, longitude, name, admin1 } = geoData.results[0];
-          await getWeatherData(latitude, longitude, `${name}, ${admin1 || ''}`);
+          await getWeatherData(latitude, longitude, `${name}${admin1 ? `, ${admin1}` : ''}`);
         } else {
-          throw new Error('Endereço não encontrado');
+          applyTemporaryWeather(
+            { temp: 25, condition: 'Endereço não encontrado', humidity: 50, wind: 0, rainProb: 0, locationName: manualAddress },
+            buildFallbackForecast()
+          );
+          setLoadingWeather(false);
         }
       } catch (error) {
         console.error('Geocoding error:', error);
+        applyTemporaryWeather(
+          { temp: 25, condition: 'Falha ao localizar endereço', humidity: 50, wind: 0, rainProb: 0, locationName: manualAddress },
+          buildFallbackForecast()
+        );
         setLoadingWeather(false);
       }
-    } else {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          await getWeatherData(position.coords.latitude, position.coords.longitude, 'Sua Localização');
-        },
-        () => {
-          const fallbackWeather: WeatherData = { temp: 25, condition: 'Localização Desativada', humidity: 50, wind: 10, rainProb: 0, locationName: 'Configure um endereço' };
-          const fallbackForecast: ForecastData = { tempMax: 27, tempMin: 20, condition: 'Variável', rainProb: 10 };
-          persistWeather(fallbackWeather, fallbackForecast);
-          setLoadingWeather(false);
-        }
-      );
+      return;
     }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        await getWeatherData(position.coords.latitude, position.coords.longitude, 'Sua Localização');
+      },
+      () => {
+        const fallbackWeather: WeatherData = { temp: 25, condition: 'Localização Desativada', humidity: 50, wind: 10, rainProb: 0, locationName: manualAddress ? `Endereço salvo: ${manualAddress}` : 'Configure um endereço' };
+        const fallbackForecast: ForecastData = buildFallbackForecast();
+        persistWeather(fallbackWeather, fallbackForecast);
+        setLoadingWeather(false);
+      }
+    );
   };
 
   // Load initial data
@@ -1109,12 +1288,8 @@ export default function App() {
 
       if (plantsList.length > 0) setPlants(plantsList.map((plant: any) => normalizePlantRecord(plant)));
       if (logsList.length > 0) setLogs(logsList);
-      if (stockList.length > 0) setStock(stockList.map((item: any) => ({
-        category: item.category || 'Insumos Gerais',
-        usageTags: inferStockUsageTags(item),
-        ...item,
-      })));
-      if (germinationsList.length > 0) setGerminations(germinationsList);
+      if (stockList.length > 0) setStock(stockList.map((item: any) => normalizeStockRecord({ category: item.category || 'Insumos Gerais', usageTags: inferStockUsageTags(item), ...item })));
+      if (germinationsList.length > 0) setGerminations(germinationsList.map((item: any) => normalizeGerminationRecord(item)));
       if (tasksList.length > 0) setTasks(tasksList);
       if (historyList.length > 0) setHistory(historyList);
       if (locationsList.length > 0) setLocations(locationsList.map((location: any) => normalizeLocation(location)));
@@ -1126,8 +1301,8 @@ export default function App() {
         normalizePlantRecord({ id: '3', name: 'Babosa', species: 'Aloe vera', locationId: '2', status: 'Recuperação', wateringFrequency: 'Quinzenal' }),
       ]);
       setStock([
-        { id: '1', name: 'Terra Vegetal', quantity: 5, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato'] },
-        { id: '2', name: 'Húmus de Minhoca', quantity: 1, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato', 'Adubação'] },
+        normalizeStockRecord({ id: '1', name: 'Terra Vegetal', quantity: 5, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato'], locationId: '2' }),
+        normalizeStockRecord({ id: '2', name: 'Húmus de Minhoca', quantity: 1, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: ['Substrato', 'Adubação'], locationId: '2' }),
       ]);
       setTasks([
         { id: '1', title: 'Adubar Manjericão', date: 'Hoje, 14:00', completed: false, plantId: '1' },
@@ -1391,7 +1566,7 @@ export default function App() {
   };
 
   const handleUpdateGermination = (updated: Germination) => {
-    setGerminations(prev => prev.map(g => g.id === updated.id ? updated : g));
+    setGerminations(prev => prev.map(g => g.id === updated.id ? normalizeGerminationRecord(updated) : g));
   };
 
   const handleDeleteGermination = (germinationId: string) => {
@@ -1801,7 +1976,7 @@ export default function App() {
           )}
 
           {activeTab === 'stock' && (
-            <StockView stock={stock} setStock={setStock} addToHistory={addToHistory} />
+            <StockView stock={stock} setStock={setStock} addToHistory={addToHistory} locations={locations} />
           )}
 
           {activeTab === 'logs' && (
@@ -2515,7 +2690,7 @@ function SeedsView({ stock, germinations, locations, onStartGermination, onUpdat
 }
 
 function GerminationView({ germinations, locations, onNewPlanting, onStartGermination, onUpdateGermination, onDeleteGermination, onTransferToGarden }: { germinations: Germination[], locations: Location[], onNewPlanting?: () => void, onStartGermination: (g: Germination) => void, onUpdateGermination: (g: Germination) => void, onDeleteGermination: (id: string) => void, onTransferToGarden: (germinationId: string, payload?: Partial<Plant>) => void }) {
-  const [manualSeed, setManualSeed] = useState({ name: '', species: '', expectedDays: 7, notes: '', image: '' });
+  const [manualSeed, setManualSeed] = useState({ name: '', species: '', expectedDays: 7, notes: '', image: '', locationId: locations[0]?.id || '' });
   const [transferingId, setTransferingId] = useState<string | null>(null);
   const [transferDraft, setTransferDraft] = useState<Partial<Plant>>({
     locationId: locations[0]?.id || '',
@@ -2528,7 +2703,7 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
 
   const addManualGermination = () => {
     if (!manualSeed.name.trim()) return;
-    onStartGermination({
+    onStartGermination(normalizeGerminationRecord({
       id: Math.random().toString(36).slice(2, 9),
       name: manualSeed.name.trim(),
       species: manualSeed.species.trim(),
@@ -2539,9 +2714,10 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
       lastWatered: new Date().toISOString(),
       germinationTechniques: 'Registro manual de germinação.',
       wateringTips: 'Mantenha o substrato levemente úmido, sem encharcar.',
-      image: manualSeed.image
-    } as Germination);
-    setManualSeed({ name: '', species: '', expectedDays: 7, notes: '', image: '' });
+      image: manualSeed.image,
+      locationId: manualSeed.locationId || locations[0]?.id || ''
+    }));
+    setManualSeed({ name: '', species: '', expectedDays: 7, notes: '', image: '', locationId: locations[0]?.id || '' });
   };
 
   const handleManualSeedImage = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2553,11 +2729,12 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
   };
 
   const startTransfer = (germination: Germination) => {
+    const suggestion = getSeedEnvironmentRecommendation(germination, locations);
     setTransferingId(germination.id);
     setTransferDraft({
       name: germination.name,
       species: germination.species || '',
-      locationId: locations[0]?.id || '',
+      locationId: germination.locationId || suggestion.best?.id || locations[0]?.id || '',
       potSize: 'Copo/mini vaso',
       wateringFrequency: 'Semanal',
       substrate: '',
@@ -2580,15 +2757,10 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-700">Acompanhamento</h3>
             {onNewPlanting && (
-              <button 
-                onClick={onNewPlanting}
-                className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-colors"
-              >
-                <Plus className="w-4 h-4" /> Novo por IA
-              </button>
+              <button onClick={onNewPlanting} className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-colors"><Plus className="w-4 h-4" /> Novo por IA local</button>
             )}
           </div>
-          <p className="text-sm text-slate-500">Gerencie rega, evolução da germinação e transfira automaticamente para o jardim quando a muda estiver pronta.</p>
+          <p className="text-sm text-slate-500">Gerencie rega, evolução da germinação, local sugerido e transfira automaticamente para o jardim quando a muda estiver pronta.</p>
         </div>
 
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
@@ -2598,11 +2770,11 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
             <input value={manualSeed.species} onChange={(e) => setManualSeed({ ...manualSeed, species: e.target.value })} placeholder="Espécie" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl" />
             <input type="number" value={manualSeed.expectedDays} onChange={(e) => setManualSeed({ ...manualSeed, expectedDays: Number(e.target.value) })} placeholder="Dias" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl" />
           </div>
+          <select value={manualSeed.locationId} onChange={(e) => setManualSeed({ ...manualSeed, locationId: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl">
+            {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+          </select>
           <textarea value={manualSeed.notes} onChange={(e) => setManualSeed({ ...manualSeed, notes: e.target.value })} placeholder="Técnicas, lembretes ou observações" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl min-h-[88px]" />
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
-            <Camera className="w-4 h-4" /> Adicionar foto manual
-            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualSeedImage} />
-          </label>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors"><Camera className="w-4 h-4" /> Adicionar foto manual<input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualSeedImage} /></label>
           {manualSeed.image && <img src={manualSeed.image} alt="Germinação manual" className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
           <button onClick={addManualGermination} className="w-full bg-emerald-500 text-white py-3 rounded-2xl font-bold hover:bg-emerald-600 transition-colors">Salvar germinação manual</button>
         </div>
@@ -2613,6 +2785,8 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
           const daysElapsed = Math.max(0, Math.floor((Date.now() - new Date(g.startDate).getTime()) / 86400000));
           const progress = Math.min(100, Math.round((daysElapsed / Math.max(g.expectedDays, 1)) * 100));
           const canTransfer = g.status === 'Sucesso' || (g.status === 'Em andamento' && daysElapsed >= Math.max(g.expectedDays - 1, 1));
+          const recommendation = getSeedEnvironmentRecommendation(g, locations);
+          const currentLocation = locations.find(location => location.id === g.locationId);
 
           return (
             <div key={g.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
@@ -2621,15 +2795,14 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
                   <h3 className="font-bold text-lg">{g.name}</h3>
                   <p className="text-sm text-slate-500 italic">{g.species || 'Espécie não informada'}</p>
                 </div>
-                <span className={`px-2 py-1 rounded-lg text-xs font-bold ${g.status === 'Em andamento' ? 'bg-blue-100 text-blue-600' : g.status === 'Sucesso' ? 'bg-emerald-100 text-emerald-600' : g.status === 'Transferida' ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'}`}>
-                  {g.status}
-                </span>
+                <span className={`px-2 py-1 rounded-lg text-xs font-bold ${g.status === 'Em andamento' ? 'bg-blue-100 text-blue-600' : g.status === 'Sucesso' ? 'bg-emerald-100 text-emerald-600' : g.status === 'Transferida' ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'}`}>{g.status}</span>
               </div>
 
               <div className="space-y-2 text-sm text-slate-600">
                 <div className="flex justify-between"><span>Início:</span> <b>{new Date(g.startDate).toLocaleDateString()}</b></div>
                 <div className="flex justify-between"><span>Expectativa:</span> <b>{g.expectedDays} dias</b></div>
                 <div className="flex justify-between"><span>Passaram:</span> <b>{daysElapsed} dias</b></div>
+                <div className="flex justify-between"><span>Ambiente:</span> <b>{currentLocation?.name || '-'}</b></div>
               </div>
 
               <div>
@@ -2638,6 +2811,15 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
               </div>
 
               {g.image && <img src={g.image} alt={g.name} className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
+
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 space-y-1">
+                <div><b>Melhor ambiente sugerido:</b> {recommendation.best?.name || '-'} • {recommendation.best?.label || '-'} ({recommendation.best?.score || 0}%)</div>
+                <div>{recommendation.best?.reason || 'Cadastre ambientes para receber uma recomendação local.'}</div>
+                {g.locationId && recommendation.current && <div><b>Compatibilidade atual:</b> {recommendation.current.label} ({recommendation.current.score}%)</div>}
+                {recommendation.best?.id && recommendation.best.id !== g.locationId && (
+                  <button onClick={() => onUpdateGermination({ ...g, locationId: recommendation.best?.id })} className="mt-2 inline-flex rounded-xl bg-white px-3 py-2 font-bold text-blue-700 hover:bg-blue-100">Aplicar ambiente sugerido</button>
+                )}
+              </div>
 
               {g.germinationTechniques && <div className="p-4 rounded-2xl bg-purple-50 text-purple-900 text-sm border border-purple-100"><b>Técnicas de germinação:</b><br />{g.germinationTechniques}</div>}
               {g.plantingInstructions && <div className="p-4 rounded-2xl bg-slate-50 text-slate-700 text-sm"><b>Como plantar:</b><br />{g.plantingInstructions}</div>}
@@ -2653,9 +2835,7 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
                 <button onClick={() => onDeleteGermination(g.id)} className="px-3 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold text-sm hover:bg-slate-200">Excluir</button>
               </div>
 
-              {canTransfer && !g.transferredPlantId && (
-                <button onClick={() => startTransfer(g)} className="w-full px-4 py-3 rounded-2xl bg-purple-600 text-white font-bold hover:bg-purple-700">Transferir automaticamente para o jardim</button>
-              )}
+              {canTransfer && !g.transferredPlantId && <button onClick={() => startTransfer(g)} className="w-full px-4 py-3 rounded-2xl bg-purple-600 text-white font-bold hover:bg-purple-700">Transferir automaticamente para o jardim</button>}
 
               {transferingId === g.id && (
                 <div className="mt-2 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
@@ -2663,18 +2843,11 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
                   <input value={transferDraft.name || ''} onChange={(e) => setTransferDraft({ ...transferDraft, name: e.target.value })} placeholder="Nome da muda" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
                   <div className="grid grid-cols-2 gap-3">
                     <input value={transferDraft.species || ''} onChange={(e) => setTransferDraft({ ...transferDraft, species: e.target.value })} placeholder="Espécie" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
-                    <select value={transferDraft.locationId || ''} onChange={(e) => setTransferDraft({ ...transferDraft, locationId: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl">
-                      {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
-                    </select>
+                    <select value={transferDraft.locationId || ''} onChange={(e) => setTransferDraft({ ...transferDraft, locationId: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl">{locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}</select>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <input value={transferDraft.potSize || ''} onChange={(e) => setTransferDraft({ ...transferDraft, potSize: e.target.value })} placeholder="Tamanho do vaso" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
-                    <select value={transferDraft.wateringFrequency || 'Semanal'} onChange={(e) => setTransferDraft({ ...transferDraft, wateringFrequency: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl">
-                      <option>Diária</option>
-                      <option>Semanal</option>
-                      <option>Quinzenal</option>
-                      <option>Mensal</option>
-                    </select>
+                    <select value={transferDraft.wateringFrequency || 'Semanal'} onChange={(e) => setTransferDraft({ ...transferDraft, wateringFrequency: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl"><option>Diária</option><option>Semanal</option><option>Quinzenal</option><option>Mensal</option></select>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <input value={transferDraft.substrate || ''} onChange={(e) => setTransferDraft({ ...transferDraft, substrate: e.target.value })} placeholder="Substrato" className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" />
@@ -2694,12 +2867,7 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
           <div className="col-span-full py-12 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
             <FlaskConical className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <p className="text-slate-500 font-medium">Nenhuma germinação ativa.</p>
-            <button 
-              onClick={onNewPlanting}
-              className="mt-4 text-emerald-600 font-bold hover:underline"
-            >
-              Começar um novo plantio agora
-            </button>
+            <button onClick={onNewPlanting} className="mt-4 text-emerald-600 font-bold hover:underline">Começar um novo plantio agora</button>
           </div>
         )}
       </div>
@@ -2707,13 +2875,14 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
   );
 }
 
-function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setStock: React.Dispatch<React.SetStateAction<StockItem[]>>, addToHistory: (item: Omit<HistoryItem, 'id' | 'date'>) => void }) {
+function StockView({ stock, setStock, addToHistory, locations }: { stock: StockItem[], setStock: React.Dispatch<React.SetStateAction<StockItem[]>>, addToHistory: (item: Omit<HistoryItem, 'id' | 'date'>) => void, locations: Location[] }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showAiForm, setShowAiForm] = useState(false);
   const [identifying, setIdentifying] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiPreview, setAiPreview] = useState<any>(null);
-  const [newItem, setNewItem] = useState<Partial<StockItem>>({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '' });
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [newItem, setNewItem] = useState<Partial<StockItem>>({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '', locationId: locations[0]?.id || '' });
 
   const categories = [
     'Substratos & Solos',
@@ -2727,7 +2896,34 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
 
   const units = ['kg', 'g', 'un', 'L', 'mL', '-'];
 
-  const resetNewItem = () => setNewItem({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '' });
+  const resetNewItem = () => setNewItem({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '', locationId: locations[0]?.id || '' });
+
+  const openNewItemForm = () => {
+    setEditingItemId(null);
+    resetNewItem();
+    setAiPreview(null);
+    setAiError(null);
+    setShowAiForm(false);
+    setShowAddForm(true);
+  };
+
+  const openEditItemForm = (item: StockItem) => {
+    setEditingItemId(item.id);
+    setNewItem(normalizeStockRecord(item));
+    setAiPreview(null);
+    setAiError(null);
+    setShowAiForm(false);
+    setShowAddForm(true);
+  };
+
+  const closeForms = () => {
+    setShowAddForm(false);
+    setShowAiForm(false);
+    setEditingItemId(null);
+    setAiPreview(null);
+    setAiError(null);
+    resetNewItem();
+  };
 
   const toggleUsageTag = (tag: string) => {
     setNewItem(prev => {
@@ -2738,28 +2934,31 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
   };
 
   const handleAddItem = () => {
-    if (!newItem.name) return;
-    const item: StockItem = {
-      id: Math.random().toString(36).substr(2, 9),
+    if (!newItem.name?.trim()) return;
+    const item: StockItem = normalizeStockRecord({
+      ...newItem,
+      id: editingItemId || newItem.id,
       name: normalizeChoice(newItem.name),
-      quantity: Number(newItem.quantity || 0),
-      unit: normalizeChoice(newItem.unit || 'un'),
-      minQuantity: 0,
-      category: newItem.category || 'Outros',
-      usageTags: inferStockUsageTags(newItem as StockItem),
-      notes: normalizeChoice(newItem.notes),
-      image: newItem.image || undefined,
-    };
-    setStock(prev => [...prev, item]);
-    addToHistory({
-      type: 'Atualização',
-      title: `Item de estoque cadastrado: ${item.name}`,
-      details: `Categoria: ${item.category}. Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.quantity} ${item.unit}.`
+      locationId: newItem.locationId || locations[0]?.id || ''
     });
-    setShowAddForm(false);
-    setAiPreview(null);
-    setShowAiForm(false);
-    resetNewItem();
+    if (editingItemId) {
+      setStock(prev => prev.map(i => i.id === editingItemId ? item : i));
+      addToHistory({
+        type: 'Atualização',
+        title: `Item de estoque atualizado: ${item.name}`,
+        details: `Categoria: ${item.category}. Local: ${locations.find(location => location.id === item.locationId)?.name || '-'}.
+Usos no app: ${item.usageTags?.join(', ') || '-'}.`
+      });
+    } else {
+      setStock(prev => [...prev, item]);
+      addToHistory({
+        type: 'Atualização',
+        title: `Item de estoque cadastrado: ${item.name}`,
+        details: `Categoria: ${item.category}. Local: ${locations.find(location => location.id === item.locationId)?.name || '-'}.
+Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.quantity} ${item.unit}.`
+      });
+    }
+    closeForms();
   };
 
   const deleteItem = (id: string) => {
@@ -2767,7 +2966,21 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
   };
 
   const updateQuantity = (id: string, delta: number) => {
-    setStock(prev => prev.map(i => i.id === id ? { ...i, quantity: Math.max(0, i.quantity + delta) } : i));
+    setStock(prev => prev.map(i => i.id === id ? normalizeStockRecord({ ...i, quantity: Math.max(0, i.quantity + delta) }) : i));
+  };
+
+  const applySuggestedLocation = (item: StockItem) => {
+    const suggestion = getStockEnvironmentRecommendation(item, locations);
+    if (!suggestion.best?.id) return;
+    setStock(prev => prev.map(entry => entry.id === item.id ? normalizeStockRecord({ ...entry, locationId: suggestion.best?.id }) : entry));
+  };
+
+  const handleManualImageSelection = (e: any) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => setNewItem(prev => ({ ...prev, image: reader.result as string }));
+    reader.readAsDataURL(file);
   };
 
   const handleImageSelection = (e: any) => {
@@ -2799,10 +3012,13 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
       setAiPreview(preview);
       setNewItem(prev => ({ ...prev, name: preview.name, category: preview.category, unit: preview.unit, notes: preview.notes, usageTags: preview.usageTags }));
       setAiError('Usei a análise local básica para você revisar e completar manualmente o item do estoque.');
+      setShowAddForm(true);
     } finally {
       setIdentifying(false);
     }
   };
+
+  const formSuggestion = getStockEnvironmentRecommendation({ ...newItem, locationId: newItem.locationId || '' }, locations);
 
   const groupedStock = categories.reduce((acc, cat) => {
     const items = stock.filter(i => i.category === cat);
@@ -2820,17 +3036,17 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Estoque de Insumos</h2>
-          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico. A identificação pode usar IA avançada quando disponível ou um modo local básico para não travar o cadastro.</p>
+          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico. Agora você também pode sugerir o melhor ambiente para guardar cada item e editar a ficha completa depois do cadastro.</p>
         </div>
         <div className="flex flex-wrap gap-3">
           <button 
-            onClick={() => { setShowAiForm(prev => !prev); setAiError(null); }}
+            onClick={() => { setShowAiForm(prev => !prev); setAiError(null); setEditingItemId(null); if (!showAiForm) resetNewItem(); }}
             className="bg-blue-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
           >
-            <PackageSearch className="w-5 h-5" /> Identificar item por IA
+            <PackageSearch className="w-5 h-5" /> Identificar item localmente
           </button>
           <button 
-            onClick={() => { setShowAddForm(true); setShowAiForm(false); }}
+            onClick={openNewItemForm}
             className="bg-emerald-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
           >
             <Plus className="w-5 h-5" /> Novo Item
@@ -2840,23 +3056,18 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
 
       <AnimatePresence>
         {showAiForm && (
-          <motion.div 
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Identificação de item do estoque por IA</h3>
-                <p className="text-slate-500 text-sm mt-1">Tire uma foto do saco, embalagem, vaso, ferramenta ou insumo. A IA tenta reconhecer o item e preencher a ficha para você revisar.</p>
+                <h3 className="text-lg font-bold text-slate-900">Identificação local de item do estoque</h3>
+                <p className="text-slate-500 text-sm mt-1">Tire uma foto do saco, embalagem, vaso, ferramenta ou insumo. O app faz uma leitura local básica e abre a ficha para você revisar e salvar.</p>
               </div>
               {!newItem.image ? (
                 <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-10 text-center space-y-4">
                   <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                     <Camera className="w-8 h-8" />
                   </div>
-                  <div className="text-slate-500 text-sm">Fotografe o item para a IA sugerir nome, categoria, unidade e uso.</div>
+                  <div className="text-slate-500 text-sm">Fotografe o item para sugerir nome, categoria, unidade e usos no app.</div>
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-500 px-5 py-3 font-bold text-white hover:bg-blue-600 transition-colors">
                     <Scan className="w-4 h-4" /> Tirar ou escolher foto
                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelection} />
@@ -2877,16 +3088,12 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
                     </div>
                   </div>
                   <div className="space-y-4">
-                    {identifying && (
-                      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-5 text-blue-700 font-medium flex items-center gap-3">
-                        <RefreshCw className="w-5 h-5 animate-spin" /> A IA está analisando o item do estoque...
-                      </div>
-                    )}
+                    {identifying && <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-5 text-blue-700 font-medium flex items-center gap-3"><RefreshCw className="w-5 h-5 animate-spin" /> Analisando o item localmente...</div>}
                     {aiPreview && (
                       <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 space-y-3">
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Sugestão da IA</div>
+                            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Sugestão local</div>
                             <div className="text-xl font-bold text-emerald-950 mt-1">{aiPreview.name}</div>
                           </div>
                           <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200">Confiança {aiPreview.confidence}</span>
@@ -2895,18 +3102,10 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
                           <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-slate-200">Categoria: {aiPreview.category}</span>
                           <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-slate-200">Unidade: {aiPreview.unit}</span>
                         </div>
-                        {aiPreview.usageTags?.length > 0 && (
-                          <div className="flex flex-wrap gap-2">
-                            {aiPreview.usageTags.map((tag: string) => (
-                              <span key={tag} className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700 border border-blue-200">Uso no app: {tag}</span>
-                            ))}
-                          </div>
-                        )}
                         <p className="text-sm text-emerald-900 leading-relaxed">{aiPreview.notes || '-'}</p>
-                        <div className="text-sm text-emerald-700">A ficha abaixo já foi preenchida com essa sugestão. Revise a quantidade e salve quando quiser.</div>
                       </div>
                     )}
-                    {aiError && <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-sm font-medium text-red-600">{aiError}</div>}
+                    {aiError && <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4 text-sm font-medium text-amber-700">{aiError}</div>}
                   </div>
                 </div>
               )}
@@ -2917,64 +3116,53 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
 
       <AnimatePresence>
         {showAddForm && (
-          <motion.div 
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-lg font-bold text-slate-900">{editingItemId ? 'Editar item do estoque' : 'Novo item do estoque'}</h3>
+                <button onClick={closeForms} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 font-semibold hover:bg-slate-200 transition-colors">Fechar</button>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-400 uppercase ml-1">Nome do Item</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ex: Terra Vegetal"
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    value={newItem.name || ''}
-                    onChange={(e) => setNewItem({...newItem, name: e.target.value})}
-                  />
+                  <input type="text" placeholder="Ex: Terra Vegetal" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value={newItem.name || ''} onChange={(e) => setNewItem({...newItem, name: e.target.value})} />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-400 uppercase ml-1">Categoria</label>
-                  <select 
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    value={newItem.category || 'Substratos & Solos'}
-                    onChange={(e) => setNewItem({...newItem, category: e.target.value})}
-                  >
+                  <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value={newItem.category || 'Substratos & Solos'} onChange={(e) => setNewItem({...newItem, category: e.target.value})}>
                     {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">Ambiente / guarda</label>
+                  <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value={newItem.locationId || ''} onChange={(e) => setNewItem({ ...newItem, locationId: e.target.value })}>
+                    <option value="">-</option>
+                    {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
                   </select>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-400 uppercase ml-1">Qtd Atual</label>
-                    <input 
-                      type="number" 
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      value={newItem.quantity ?? 0}
-                      onChange={(e) => setNewItem({...newItem, quantity: Number(e.target.value)})}
-                    />
+                    <input type="number" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value={newItem.quantity ?? 0} onChange={(e) => setNewItem({...newItem, quantity: Number(e.target.value)})} />
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-400 uppercase ml-1">Unidade</label>
-                    <select 
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      value={newItem.unit || 'kg'}
-                      onChange={(e) => setNewItem({...newItem, unit: e.target.value})}
-                    >
+                    <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value={newItem.unit || 'kg'} onChange={(e) => setNewItem({...newItem, unit: e.target.value})}>
                       {units.map(unit => <option key={unit} value={unit}>{unit}</option>)}
                     </select>
                   </div>
                 </div>
                 <div className="md:col-span-2 lg:col-span-3 space-y-1">
                   <label className="text-xs font-bold text-slate-400 uppercase ml-1">Observações</label>
-                  <textarea 
-                    rows={3}
-                    placeholder="Para que serve, como você usa ou qualquer observação importante."
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    value={newItem.notes || ''}
-                    onChange={(e) => setNewItem({...newItem, notes: e.target.value})}
-                  />
+                  <textarea rows={3} placeholder="Para que serve, como você usa ou qualquer observação importante." className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value={newItem.notes || ''} onChange={(e) => setNewItem({...newItem, notes: e.target.value})} />
+                </div>
+                <div className="md:col-span-2 lg:col-span-3 space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">Foto manual</label>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
+                    <Camera className="w-4 h-4" /> Adicionar ou trocar foto
+                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualImageSelection} />
+                  </label>
+                  {newItem.image && <img src={newItem.image} alt={newItem.name || 'Item do estoque'} className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
                 </div>
                 <div className="md:col-span-2 lg:col-span-3 space-y-2">
                   <label className="text-xs font-bold text-slate-400 uppercase ml-1">Categorias de uso no app</label>
@@ -2982,12 +3170,7 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
                     {STOCK_USAGE_TAGS.map(tag => {
                       const active = inferStockUsageTags(newItem as StockItem).includes(tag);
                       return (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => toggleUsageTag(tag)}
-                          className={`rounded-full px-3 py-2 text-xs font-bold transition-colors border ${active ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-200 hover:text-blue-700'}`}
-                        >
+                        <button key={tag} type="button" onClick={() => toggleUsageTag(tag)} className={`rounded-full px-3 py-2 text-xs font-bold transition-colors border ${active ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-200 hover:text-blue-700'}`}>
                           {tag}
                         </button>
                       );
@@ -2996,19 +3179,17 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
                   <p className="text-xs text-slate-500">Você pode marcar mais de uma categoria de uso. Isso melhora as sugestões automáticas do app.</p>
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 space-y-2 text-sm text-blue-900">
+                <div className="font-bold">Sugestão de ambiente para guardar esse item</div>
+                <p><b>Melhor local:</b> {formSuggestion.best?.name || '-'} • {formSuggestion.best?.label || '-'} ({formSuggestion.best?.score || 0}%)</p>
+                <p>{formSuggestion.best?.reason || 'Cadastre alguns ambientes para receber uma sugestão automática.'}</p>
+                {newItem.locationId && formSuggestion.current && <p><b>Compatibilidade do local atual:</b> {formSuggestion.current.name} • {formSuggestion.current.label} ({formSuggestion.current.score}%)</p>}
+              </div>
+
               <div className="flex justify-end gap-3">
-                <button 
-                  onClick={() => { setShowAddForm(false); setAiPreview(null); if (!showAiForm) resetNewItem(); }}
-                  className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  onClick={handleAddItem}
-                  className="px-8 py-2 bg-emerald-500 text-white font-bold rounded-xl hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/10"
-                >
-                  Salvar Item
-                </button>
+                <button onClick={closeForms} className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-colors">Cancelar</button>
+                <button onClick={handleAddItem} className="px-8 py-2 bg-emerald-500 text-white font-bold rounded-xl hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/10">{editingItemId ? 'Salvar alterações' : 'Salvar Item'}</button>
               </div>
             </div>
           </motion.div>
@@ -3018,76 +3199,54 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
       <div className="space-y-8">
         {Object.entries(groupedStock).map(([category, items]) => (
           <div key={category} className="space-y-4">
-            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 ml-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-500" />
-              {category}
-            </h3>
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 ml-2"><div className="w-2 h-2 rounded-full bg-emerald-500" />{category}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {items.map(item => (
-                <div key={item.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow group">
-                  <div className="flex justify-between items-start mb-4 gap-3">
+              {items.map(item => {
+                const recommendation = getStockEnvironmentRecommendation(item, locations);
+                const currentLocation = locations.find(location => location.id === item.locationId);
+                return (
+                <div key={item.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow group space-y-4">
+                  <div className="flex justify-between items-start gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       {item.image ? (
-                        <div className="w-14 h-14 rounded-2xl overflow-hidden border border-slate-200 shrink-0">
-                          <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
-                        </div>
+                        <div className="w-14 h-14 rounded-2xl overflow-hidden border border-slate-200 shrink-0"><img src={item.image} alt={item.name} className="w-full h-full object-cover" /></div>
                       ) : (
-                        <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 shrink-0 flex items-center justify-center text-slate-400">
-                          <Package className="w-6 h-6" />
-                        </div>
+                        <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 shrink-0 flex items-center justify-center text-slate-400"><Package className="w-6 h-6" /></div>
                       )}
                       <div className="min-w-0">
                         <h4 className="font-bold text-slate-900 truncate">{item.name}</h4>
                         <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">{item.category}</p>
-                        {inferStockUsageTags(item).length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {inferStockUsageTags(item).map(tag => (
-                              <span key={tag} className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 border border-blue-100">{tag}</span>
-                            ))}
-                          </div>
-                        )}
+                        {inferStockUsageTags(item).length > 0 && <div className="mt-2 flex flex-wrap gap-1">{inferStockUsageTags(item).map(tag => <span key={tag} className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 border border-blue-100">{tag}</span>)}</div>}
                       </div>
                     </div>
-                    <button 
-                      onClick={() => deleteItem(item.id)}
-                      className="text-slate-300 hover:text-red-500 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => openEditItemForm(item)} className="text-slate-300 hover:text-emerald-500 transition-colors"><Edit3 className="w-4 h-4" /></button>
+                      <button onClick={() => deleteItem(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                    </div>
                   </div>
-                  
+
                   <div className="flex items-end justify-between gap-4">
                     <div>
-                      <div className="text-2xl font-black text-slate-900">
-                        {item.quantity} <span className="text-sm font-bold text-slate-400">{item.unit}</span>
-                      </div>
-                      <div className="text-[10px] font-bold uppercase mt-1 text-emerald-500">
-                        Disponível para uso
-                      </div>
+                      <div className="text-2xl font-black text-slate-900">{item.quantity} <span className="text-sm font-bold text-slate-400">{item.unit}</span></div>
+                      <div className="text-[10px] font-bold uppercase mt-1 text-emerald-500">Disponível para uso</div>
                     </div>
                     <div className="flex gap-1">
-                      <button 
-                        onClick={() => updateQuantity(item.id, -1)}
-                        className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors"
-                      >
-                        -
-                      </button>
-                      <button 
-                        onClick={() => updateQuantity(item.id, 1)}
-                        className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600 hover:bg-emerald-100 transition-colors"
-                      >
-                        +
-                      </button>
+                      <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors">-</button>
+                      <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600 hover:bg-emerald-100 transition-colors">+</button>
                     </div>
                   </div>
-                  
-                  {item.notes && item.notes !== '-' && (
-                    <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-600">
-                      {item.notes}
-                    </div>
-                  )}
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 space-y-1">
+                    <div><b>Local atual:</b> {currentLocation?.name || '-'}</div>
+                    <div><b>Melhor local sugerido:</b> {recommendation.best?.name || '-'} • {recommendation.best?.label || '-'} ({recommendation.best?.score || 0}%)</div>
+                    <div>{recommendation.best?.reason || 'Cadastre ambientes para receber recomendações locais.'}</div>
+                    {item.locationId && recommendation.current && <div><b>Compatibilidade atual:</b> {recommendation.current.label} ({recommendation.current.score}%)</div>}
+                    {recommendation.best?.id && recommendation.best.id !== item.locationId && <button onClick={() => applySuggestedLocation(item)} className="mt-2 inline-flex rounded-xl bg-blue-50 px-3 py-2 font-bold text-blue-700 hover:bg-blue-100">Aplicar ambiente sugerido</button>}
+                  </div>
+
+                  {item.notes && item.notes !== '-' && <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-600 whitespace-pre-line">{item.notes}</div>}
                 </div>
-              ))}
+              )})}
             </div>
           </div>
         ))}
@@ -3095,12 +3254,7 @@ function StockView({ stock, setStock, addToHistory }: { stock: StockItem[], setS
           <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
             <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <p className="text-slate-400 font-medium">Seu estoque está vazio.</p>
-            <button 
-              onClick={() => setShowAddForm(true)}
-              className="mt-4 text-emerald-600 font-bold hover:underline"
-            >
-              Adicionar primeiro item
-            </button>
+            <button onClick={openNewItemForm} className="mt-4 text-emerald-600 font-bold hover:underline">Adicionar primeiro item</button>
           </div>
         )}
       </div>
@@ -4071,11 +4225,16 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
 function SettingsView({ settings, saveSettings, setSettings, data }: any) {
   const [importData, setImportData] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState(settings.geminiApiKey || getSavedGeminiKey() || '');
+  const [manualAddressDraft, setManualAddressDraft] = useState(settings.gardenAddress || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setApiKeyDraft(settings.geminiApiKey || getSavedGeminiKey() || '');
   }, [settings.geminiApiKey]);
+
+  useEffect(() => {
+    setManualAddressDraft(settings.gardenAddress || '');
+  }, [settings.gardenAddress]);
 
   const handleImport = (jsonString: string) => {
     try {
@@ -4124,6 +4283,17 @@ function SettingsView({ settings, saveSettings, setSettings, data }: any) {
   const handleApiKeySave = () => {
     saveSettings({ ...settings, geminiApiKey: apiKeyDraft.trim() });
     alert(apiKeyDraft.trim() ? 'Chave da IA salva somente neste dispositivo.' : 'Chave local removida deste dispositivo.');
+  };
+
+  const handleManualAddressSave = () => {
+    const trimmedAddress = manualAddressDraft.trim();
+    saveSettings({
+      ...settings,
+      weatherMode: 'manual',
+      gardenAddress: trimmedAddress,
+      geminiApiKey: apiKeyDraft.trim() || settings.geminiApiKey || ''
+    });
+    alert(trimmedAddress ? `Endereço salvo: ${trimmedAddress}` : 'Digite um endereço antes de salvar.');
   };
 
   return (
@@ -4179,14 +4349,14 @@ function SettingsView({ settings, saveSettings, setSettings, data }: any) {
             <label className="font-semibold text-slate-700">Modo de Localização</label>
             <div className="grid grid-cols-2 gap-4">
               <button 
-                onClick={() => saveSettings({ ...settings, weatherMode: 'auto', geminiApiKey: apiKeyDraft.trim() || settings.geminiApiKey || '' })}
+                onClick={() => saveSettings({ ...settings, weatherMode: 'auto', gardenAddress: manualAddressDraft.trim() || settings.gardenAddress || '', geminiApiKey: apiKeyDraft.trim() || settings.geminiApiKey || '' })}
                 className={`p-4 rounded-2xl border-2 transition-all text-left ${settings.weatherMode === 'auto' ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-100 hover:border-slate-200 text-slate-600'}`}
               >
                 <div className="font-bold mb-1">Automático</div>
                 <div className="text-xs opacity-70">Usa o GPS do seu dispositivo</div>
               </button>
               <button 
-                onClick={() => saveSettings({ ...settings, weatherMode: 'manual', geminiApiKey: apiKeyDraft.trim() || settings.geminiApiKey || '' })}
+                onClick={() => saveSettings({ ...settings, weatherMode: 'manual', gardenAddress: manualAddressDraft.trim() || settings.gardenAddress || '', geminiApiKey: apiKeyDraft.trim() || settings.geminiApiKey || '' })}
                 className={`p-4 rounded-2xl border-2 transition-all text-left ${settings.weatherMode === 'manual' ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-100 hover:border-slate-200 text-slate-600'}`}
               >
                 <div className="font-bold mb-1">Manual</div>
@@ -4207,15 +4377,18 @@ function SettingsView({ settings, saveSettings, setSettings, data }: any) {
                   type="text" 
                   placeholder="Ex: Guarulhos, SP" 
                   className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                  value={settings.gardenAddress}
-                  onChange={(e) => setSettings({ ...settings, gardenAddress: e.target.value })}
+                  value={manualAddressDraft}
+                  onChange={(e) => setManualAddressDraft(e.target.value)}
                 />
                 <button 
-                  onClick={() => saveSettings({ ...settings, geminiApiKey: apiKeyDraft.trim() || settings.geminiApiKey || '' })}
+                  onClick={handleManualAddressSave}
                   className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-600 transition-colors"
                 >
-                  Salvar
+                  Salvar endereço
                 </button>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <b className="text-slate-800">Endereço salvo:</b> {settings.gardenAddress?.trim() || 'nenhum endereço salvo ainda'}
               </div>
             </motion.div>
           )}
@@ -4583,6 +4756,9 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
     setEditData(plant);
   }, [plant]);
 
+  const environmentRecommendation = useMemo(() => getPlantEnvironmentRecommendation(editData, locations), [editData, locations]);
+  const currentLocationMatch = environmentRecommendation.current;
+  const bestLocationMatch = environmentRecommendation.best;
 
   const handleSave = () => {
     if (onUpdate) onUpdate(normalizePlantRecord(editData));
@@ -4664,6 +4840,19 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
               </div>
               <div className="flex items-center gap-2 text-sm text-slate-600">
                 <History className="w-4 h-4 text-violet-500" /> Vida no jardim: {getPlantLifeLabel(plant.createdAt)}
+              </div>
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900 space-y-1">
+                <div><b>Compatibilidade do local atual:</b> {currentLocationMatch ? `${currentLocationMatch.label} (${currentLocationMatch.score}%)` : 'Sem ambiente definido'}</div>
+                <div><b>Melhor ambiente sugerido:</b> {bestLocationMatch?.name || '-'} • {bestLocationMatch?.label || '-'} ({bestLocationMatch?.score || 0}%)</div>
+                <div>{bestLocationMatch?.reason || 'Cadastre ambientes para receber recomendação automática.'}</div>
+                {bestLocationMatch?.id && bestLocationMatch.id !== plant.locationId && onUpdate && (
+                  <button
+                    onClick={() => onUpdate(normalizePlantRecord({ ...plant, locationId: bestLocationMatch.id }))}
+                    className="mt-2 inline-flex rounded-xl bg-white px-3 py-2 font-bold text-blue-700 hover:bg-blue-100"
+                  >
+                    Mover para ambiente sugerido
+                  </button>
+                )}
               </div>
 
               <div className="mt-4 pt-4 border-t border-slate-100 space-y-2">
