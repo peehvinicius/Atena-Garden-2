@@ -101,6 +101,7 @@ interface StockItem {
   notes?: string;
   image?: string;
   locationId?: string;
+  isFavorite?: boolean;
 }
 
 interface Germination {
@@ -497,6 +498,104 @@ const getPlantLifeLabel = (createdAt?: string) => {
 };
 
 const imageFieldClassName = 'w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl';
+
+const getPlantLifeDays = (createdAt?: string) => {
+  if (!createdAt) return 0;
+  const started = new Date(createdAt).getTime();
+  if (Number.isNaN(started)) return 0;
+  return Math.max(0, Math.floor((Date.now() - started) / 86400000));
+};
+
+const getPlantPhase = (plant: Plant) => {
+  const days = getPlantLifeDays(plant.createdAt);
+  if (plant.status === 'Problema') return 'Em observação';
+  if (plant.status === 'Recuperação') return 'Recuperação';
+  if (days <= 7) return 'Recém-chegada';
+  if (days <= 30) return 'Adaptação';
+  if (days <= 180) return 'Crescimento';
+  return 'Manutenção';
+};
+
+const getPlantObservationLevel = (plant: Plant) => {
+  const days = getPlantLifeDays(plant.createdAt);
+  if (plant.status === 'Problema') return 'Alta';
+  if (plant.status === 'Recuperação' || days <= 14) return 'Média';
+  return 'Baixa';
+};
+
+const getPlantTimelineEntries = (plant: Plant) => {
+  const entries = [
+    plant.createdAt ? { id: `${plant.id}-created`, date: plant.createdAt, title: 'Cadastro', detail: 'Primeiro registro no jardim.' } : null,
+    plant.lastWatered ? { id: `${plant.id}-watered`, date: plant.lastWatered, title: 'Última rega', detail: 'Último cuidado de rega registrado.' } : null,
+    plant.lastRepotted ? { id: `${plant.id}-repotted`, date: plant.lastRepotted, title: 'Último replantio', detail: 'Registro de troca de vaso / substrato.' } : null,
+    plant.diagnosisUpdatedAt ? { id: `${plant.id}-diagnosis`, date: plant.diagnosisUpdatedAt, title: 'Análise de sintomas', detail: plant.probableDiagnosis || 'Sintomas atualizados.' } : null,
+    ...(plant.photoHistory || []).map((entry) => ({ id: `${plant.id}-${entry.id}`, date: entry.date, title: 'Registro fotográfico', detail: entry.note || entry.source || 'Acompanhamento visual.', image: entry.image })),
+  ].filter(Boolean);
+  return entries.sort((a: any, b: any) => new Date(b!.date).getTime() - new Date(a!.date).getTime());
+};
+
+const getPlantNextAction = (plant: Plant) => {
+  const phase = getPlantPhase(plant);
+  if (plant.status === 'Problema') return 'Revisar sintomas e ambiente';
+  if (!plant.lastWatered) return 'Registrar primeira rega';
+  if (phase === 'Recém-chegada' || phase === 'Adaptação') return 'Observar adaptação e umidade';
+  if (!plant.lastRepotted && getPlantLifeDays(plant.createdAt) > 120) return 'Avaliar necessidade de replantio';
+  return 'Acompanhar crescimento';
+};
+
+const getGerminationPhase = (item: Germination) => {
+  const elapsed = Math.max(0, Math.floor((Date.now() - new Date(item.startDate).getTime()) / 86400000));
+  if (item.status === 'Transferida') return 'Transferida';
+  if (item.status === 'Falha') return 'Encerrada';
+  if (item.status === 'Sucesso') return 'Brotada';
+  if (elapsed <= 2) return 'Preparação';
+  if (elapsed <= Math.max(3, Math.floor(item.expectedDays * 0.5))) return 'Germinação inicial';
+  if (elapsed <= item.expectedDays) return 'Janela de brotação';
+  return 'Acompanhamento extra';
+};
+
+const getGerminationChecklist = (item: Germination) => {
+  const steps = [
+    item.hydratedWithWarmWater ? 'Dormência/hidratação já registrada' : 'Verificar necessidade de hidratação',
+    item.lastWatered ? 'Umidade acompanhada recentemente' : 'Registrar rega da germinação',
+    item.locationId ? 'Ambiente definido para a bandeja' : 'Escolher ambiente adequado',
+    item.status === 'Sucesso' ? 'Planejar transferência para o jardim' : 'Observar surgimento de brotos',
+  ];
+  return steps;
+};
+
+const buildPlantMarkdownReport = (plant: Plant, locations: Location[]) => {
+  const location = locations.find((entry) => entry.id === plant.locationId);
+  const timeline = getPlantTimelineEntries(plant).slice(0, 8);
+  return `# ${plant.name}
+
+- **Nome científico:** ${plant.species || UNKNOWN_OPTION}
+- **Ambiente:** ${location?.name || UNKNOWN_OPTION}
+- **Status:** ${plant.status}
+- **Frequência de rega:** ${plant.wateringFrequency}
+- **Tempo de vida no jardim:** ${getPlantLifeLabel(plant.createdAt)}
+- **Fase atual:** ${getPlantPhase(plant)}
+
+## Ficha técnica
+- **Vaso:** ${plant.potSize || UNKNOWN_OPTION}
+- **Substrato:** ${plant.substrateMix || plant.substrate || UNKNOWN_OPTION}
+- **Drenagem:** ${plant.drainageLayer || plant.drainage || UNKNOWN_OPTION}
+- **Filtragem:** ${plant.filterMaterial || UNKNOWN_OPTION}
+
+## Observações
+${plant.notes || UNKNOWN_OPTION}
+
+## Linha do tempo
+${timeline.map((entry: any) => `- ${new Date(entry.date).toLocaleDateString('pt-BR')}: **${entry.title}** — ${entry.detail}`).join('\n') || '- Sem eventos registrados'}
+`;
+};
+
+const getLocationUsageStats = (locationId: string, plants: Plant[], germinations: Germination[], stock: StockItem[]) => ({
+  plants: plants.filter((plant) => plant.locationId === locationId).length,
+  germinations: germinations.filter((item) => item.locationId === locationId).length,
+  stock: stock.filter((item) => item.locationId === locationId).length,
+});
+
 
 const isGeminiQuotaError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -1632,6 +1731,44 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  const handleDuplicatePlant = (plantId: string) => {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    const duplicated = normalizePlantRecord({
+      ...plant,
+      id: makeId(),
+      name: `${plant.name} (cópia)`,
+      isFavorite: false,
+      createdAt: new Date().toISOString(),
+      lastWatered: '',
+      lastRepotted: '',
+      photoHistory: plant.image ? [createPhotoEntry(plant.image, 'Foto inicial da cópia', 'Duplicação')] : []
+    });
+    setPlants(prev => [duplicated, ...prev]);
+    addToHistory({
+      type: 'Atualização',
+      title: `Planta duplicada: ${plant.name}`,
+      details: `Foi criada uma nova ficha a partir de ${plant.name}.`,
+      plantId: duplicated.id,
+      image: duplicated.image,
+    });
+    showToast(`Duplicata criada a partir de ${plant.name}.`);
+  };
+
+  const handleExportPlant = (plantId: string) => {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    const markdown = buildPlantMarkdownReport(plant, locations);
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${plant.name.toLowerCase().replace(/[^a-z0-9]+/gi, '_')}_relatorio.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast(`Relatório de ${plant.name} exportado.`);
+  };
+
   const handleDeletePlant = (plantId: string) => {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
@@ -1944,16 +2081,14 @@ export default function App() {
 
         <nav className="flex-1 space-y-1 overflow-y-auto pr-2 custom-scrollbar relative z-10">
           <SidebarLink icon={LayoutDashboard} label="Painel" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <SidebarLink icon={AlertCircle} label={`Alertas (${activeAlerts.length})`} active={activeTab === 'alerts'} onClick={() => setActiveTab('alerts')} />
-          
-          <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Jardim</div>
+                    <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Jardim</div>
           <SidebarLink icon={Sprout} label="Minhas Plantas" active={activeTab === 'plants'} onClick={() => setActiveTab('plants')} />
           <SidebarLink icon={MapPin} label="Ambientes" active={activeTab === 'places'} onClick={() => setActiveTab('places')} />
           <SidebarLink icon={FlaskConical} label="Sementes & Germinação" active={activeTab === 'seeds'} onClick={() => setActiveTab('seeds')} />
           <SidebarLink icon={StockIcon} label="Estoque" active={activeTab === 'stock'} onClick={() => setActiveTab('stock')} />
           
-          <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ferramentas</div>
-          <SidebarLink icon={Scan} label="Identificar Planta" active={activeTab === 'identify'} onClick={() => setActiveTab('identify')} />
+          <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cadastro</div>
+          <SidebarLink icon={Plus} label="Nova Planta" active={activeTab === 'identify'} onClick={() => setActiveTab('identify')} />
           
           <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Histórico</div>
           <SidebarLink icon={LogsIcon} label="Histórico de Regas" active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
@@ -1980,13 +2115,13 @@ export default function App() {
           <button 
             onClick={() => setActiveTab('identify')}
             className={`w-18 h-18 rounded-full flex items-center justify-center text-white shadow-[0_8px_30px_rgba(16,185,129,0.4)] border-4 border-white transition-all active:scale-95 ${activeTab === 'identify' ? 'bg-emerald-600 scale-110' : 'bg-emerald-500'}`}
+            aria-label="Nova planta"
           >
-            <Scan className="w-9 h-9" />
+            <Plus className="w-9 h-9" />
           </button>
         </div>
         <div className="flex flex-1 items-end justify-around">
-          <MobileNavItem icon={AlertCircle} active={activeTab === 'alerts'} onClick={() => setActiveTab('alerts')} />
-          <MobileNavItem icon={StockIcon} active={activeTab === 'stock'} onClick={() => setActiveTab('stock')} />
+                    <MobileNavItem icon={StockIcon} active={activeTab === 'stock'} onClick={() => setActiveTab('stock')} />
         </div>
       </nav>
 
@@ -2051,14 +2186,6 @@ export default function App() {
               />
             </div>
             <button
-              onClick={() => setActiveTab('alerts')}
-              className="flex items-center gap-2 bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-semibold text-slate-700 hover:border-amber-300 hover:bg-amber-50 transition-colors"
-            >
-              <AlertCircle className="w-5 h-5 text-amber-500" />
-              <span className="hidden sm:inline">Alertas</span>
-              <span className="inline-flex min-w-6 justify-center rounded-full bg-amber-500 px-2 py-0.5 text-xs font-bold text-white">{activeAlerts.length}</span>
-            </button>
-            <button
               onClick={() => setActiveTab('settings')}
               className="md:hidden flex items-center justify-center bg-white border border-slate-200 px-3 py-2.5 rounded-xl font-semibold text-slate-700 hover:border-slate-300 hover:bg-slate-50 transition-colors"
               aria-label="Abrir configurações"
@@ -2069,10 +2196,19 @@ export default function App() {
               onClick={() => setActiveTab('identify')}
               className="hidden md:flex items-center gap-2 bg-emerald-500 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
             >
-              <Scan className="w-5 h-5" /> Identificar e Adicionar
+              <Plus className="w-5 h-5" /> Nova Planta
             </button>
           </div>
         </header>
+
+        <button
+          onClick={() => setActiveTab('alerts')}
+          className="fixed bottom-28 md:bottom-8 right-5 md:right-8 z-[150] flex items-center gap-2 rounded-full bg-amber-500 px-4 py-3 text-white shadow-[0_12px_32px_rgba(245,158,11,0.35)] hover:bg-amber-600 transition-colors"
+          aria-label="Abrir alertas"
+        >
+          <AlertCircle className="w-5 h-5" />
+          <span className="text-sm font-bold">{activeAlerts.length}</span>
+        </button>
 
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
@@ -2115,6 +2251,8 @@ export default function App() {
               onRepot={handleRepotPlant}
               onDelete={handleDeletePlant}
               onAdd={() => setActiveTab('identify')}
+              onDuplicate={handleDuplicatePlant}
+              onExport={handleExportPlant}
             />
           )}
 
@@ -2179,7 +2317,6 @@ export default function App() {
               locations={locations}
               stock={stock}
               addToHistory={addToHistory}
-              onApplyLightToLocation={handleApplyLightToLocation}
             />
           )}
 
@@ -2215,6 +2352,9 @@ export default function App() {
 // --- View Components ---
 
 function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats, filteredPlants, locations, setActiveTab, tasks, setWateringConfirmation, history, wateredToday, activeAlerts, stock, germinations }: any) {
+  const todayFocus = useMemo(() => filteredPlants.filter((plant: Plant) => getPlantObservationLevel(plant) === 'Alta' || !plant.lastWatered || getPlantPhase(plant) === 'Recém-chegada').slice(0, 4), [filteredPlants]);
+  const weekFocus = useMemo(() => filteredPlants.filter((plant: Plant) => getPlantLifeDays(plant.createdAt) <= 45 || !plant.lastRepotted || plant.status === 'Recuperação').slice(0, 4), [filteredPlants]);
+  const observationFocus = useMemo(() => filteredPlants.filter((plant: Plant) => plant.status !== 'Saudável' || !!plant.symptomNotes).slice(0, 4), [filteredPlants]);
   return (
     <motion.div 
       key="dashboard"
@@ -2324,6 +2464,28 @@ function DashboardView({ weather, loadingWeather, fetchWeather, forecast, stats,
           <GardenSummary plants={filteredPlants} locations={locations} />
         </div>
       </div>
+
+
+      <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-slate-900">Hoje</h3><span className="text-xs font-bold uppercase tracking-wider text-slate-400">Prioridade</span></div>
+          <div className="space-y-3">
+            {todayFocus.length ? todayFocus.map((plant: Plant) => <div key={plant.id} className="rounded-2xl bg-slate-50 px-4 py-3"><div className="font-semibold text-slate-900">{plant.name}</div><div className="text-sm text-slate-500">{getPlantNextAction(plant)}</div></div>) : <div className="text-sm text-slate-500">Nenhuma planta urgente hoje.</div>}
+          </div>
+        </div>
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-slate-900">Semana</h3><span className="text-xs font-bold uppercase tracking-wider text-slate-400">Planejamento</span></div>
+          <div className="space-y-3">
+            {weekFocus.length ? weekFocus.map((plant: Plant) => <div key={plant.id} className="rounded-2xl bg-slate-50 px-4 py-3"><div className="font-semibold text-slate-900">{plant.name}</div><div className="text-sm text-slate-500">{!plant.lastRepotted ? 'Avaliar primeiro replantio ou adaptação.' : getPlantPhase(plant)}</div></div>) : <div className="text-sm text-slate-500">Nada crítico para a semana.</div>}
+          </div>
+        </div>
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-slate-900">Em observação</h3><span className="text-xs font-bold uppercase tracking-wider text-slate-400">Acompanhar</span></div>
+          <div className="space-y-3">
+            {observationFocus.length ? observationFocus.map((plant: Plant) => <div key={plant.id} className="rounded-2xl bg-slate-50 px-4 py-3"><div className="font-semibold text-slate-900">{plant.name}</div><div className="text-sm text-slate-500">{plant.symptomNotes || plant.status}</div></div>) : <div className="text-sm text-slate-500">Nenhuma planta em observação forte.</div>}
+          </div>
+        </div>
+      </section>
 
       {/* Bulk Watering Shortcuts */}
       <section className="bg-white rounded-3xl p-10 border border-slate-200 shadow-sm">
@@ -2518,16 +2680,60 @@ function AlertsView({ alerts, archivedAlerts, onOpenTab, onDismiss, onReactivate
   );
 }
 
-function PlantsView({ filteredPlants, locations, onWater, onUpdate, onRepot, onDelete, onAdd }: any) {
+function PlantsView({ filteredPlants, locations, onWater, onUpdate, onRepot, onDelete, onAdd, onDuplicate, onExport }: any) {
+  const [viewMode, setViewMode] = useState<'all' | 'today' | 'week' | 'observe'>('all');
+
+  const visiblePlants = useMemo(() => {
+    if (viewMode === 'today') return filteredPlants.filter((plant: Plant) => getPlantObservationLevel(plant) === 'Alta' || !plant.lastWatered || getPlantPhase(plant) === 'Recém-chegada');
+    if (viewMode === 'week') return filteredPlants.filter((plant: Plant) => getPlantLifeDays(plant.createdAt) <= 45 || !plant.lastRepotted || plant.status === 'Recuperação');
+    if (viewMode === 'observe') return filteredPlants.filter((plant: Plant) => plant.status !== 'Saudável' || !!plant.symptomNotes || getPlantObservationLevel(plant) !== 'Baixa');
+    return filteredPlants;
+  }, [filteredPlants, viewMode]);
+
+  const favoriteCount = filteredPlants.filter((plant: Plant) => plant.isFavorite).length;
+
   return (
     <motion.div 
       key="plants"
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
+      className="space-y-6"
     >
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-3">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">Minhas Plantas</h2>
+              <p className="text-sm text-slate-500 mt-1">Organize por foco do dia, acompanhe fases e use o histórico para comparar evolução.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                ['all', `Todas (${filteredPlants.length})`],
+                ['today', 'Hoje'],
+                ['week', 'Semana'],
+                ['observe', 'Em observação'],
+              ].map(([key, label]) => (
+                <button key={key} onClick={() => setViewMode(key as any)} className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${viewMode === key ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+          <div className="text-[11px] uppercase tracking-[0.18em] font-bold text-slate-400">Coleção</div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-2xl bg-slate-50 p-3"><div className="text-slate-400 text-xs">Favoritas</div><div className="text-2xl font-bold text-slate-900">{favoriteCount}</div></div>
+            <div className="rounded-2xl bg-slate-50 p-3"><div className="text-slate-400 text-xs">Em observação</div><div className="text-2xl font-bold text-slate-900">{filteredPlants.filter((plant: Plant) => getPlantObservationLevel(plant) !== 'Baixa').length}</div></div>
+            <div className="rounded-2xl bg-slate-50 p-3"><div className="text-slate-400 text-xs">Novas</div><div className="text-2xl font-bold text-slate-900">{filteredPlants.filter((plant: Plant) => getPlantLifeDays(plant.createdAt) <= 30).length}</div></div>
+            <div className="rounded-2xl bg-slate-50 p-3"><div className="text-slate-400 text-xs">Replantio</div><div className="text-2xl font-bold text-slate-900">{filteredPlants.filter((plant: Plant) => !plant.lastRepotted || getPlantLifeDays(plant.createdAt) > 120).length}</div></div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {filteredPlants.map((plant: any) => (
+        {visiblePlants.map((plant: any) => (
           <PlantCard 
             key={plant.id} 
             plant={plant} 
@@ -2537,6 +2743,8 @@ function PlantsView({ filteredPlants, locations, onWater, onUpdate, onRepot, onD
             onUpdate={onUpdate}
             onRepot={onRepot}
             onDelete={onDelete}
+            onDuplicate={onDuplicate}
+            onExport={onExport}
           />
         ))}
         <button onClick={onAdd} className="aspect-[4/5] border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-emerald-500 hover:text-emerald-500 transition-all group">
@@ -2695,7 +2903,7 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
           </div>
           <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
             <b>Ambiente visual</b><br />
-            Adicione uma foto manual para comparar futuras medições de luz e mudanças no espaço.
+            Adicione uma foto manual apenas para registrar visualmente o ambiente.
           </div>
         </div>
         <textarea
@@ -2704,40 +2912,8 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
           placeholder="Anotações do ambiente"
           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl min-h-[88px]"
         />
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 space-y-4">
-          <div className="flex items-start gap-3 text-sm text-amber-900">
-            <ThermometerSun className="w-5 h-5 shrink-0 text-amber-500" />
-            <div>
-              <div className="font-bold">Medição de luminosidade integrada ao ambiente</div>
-              <p>{MIDDAY_LIGHT_GUIDE}</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3 items-center">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600 transition-colors">
-              <Sun className="w-4 h-4" /> Medir luz deste ambiente
-              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleLightCapture} />
-            </label>
-            {lightAnalyzing && <span className="text-sm font-medium text-emerald-700">Analisando luminosidade...</span>}
-          </div>
-          {lightScanImage && (
-            <div className="overflow-hidden rounded-2xl border border-amber-100 bg-white">
-              <img src={lightScanImage} alt="Leitura do ambiente" className="h-40 w-full object-cover" />
-            </div>
-          )}
-          {lightResult && (
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl bg-white p-4 border border-emerald-100">
-                <div className="text-xs font-bold uppercase tracking-wider text-emerald-600 mb-1">Luz estimada</div>
-                <div className="text-lg font-bold text-slate-900">{lightResult.level}</div>
-                <div className="text-sm text-slate-500">{lightResult.sunPeriod}</div>
-              </div>
-              <div className="rounded-2xl bg-white p-4 border border-blue-100 text-sm text-slate-700 space-y-2">
-                <p><b>Leitura:</b> {lightResult.explanation}</p>
-                <p><b>Dica:</b> {lightResult.tip}</p>
-              </div>
-            </div>
-          )}
-          {lightError && <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{lightError}</div>}
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
+          <b>Luminosidade manual:</b> ajuste os campos de luz e período de sol com base na sua observação do ambiente. O app não faz mais leitura por foto.
         </div>
         <div className="flex flex-wrap gap-4">
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -2772,6 +2948,18 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
 
             {location.image && <img src={location.image} alt={location.name} className="w-full h-44 object-cover rounded-2xl border border-slate-200" />}
             {location.notes && <div className="p-4 rounded-2xl bg-slate-50 text-sm text-slate-600">{location.notes}</div>}
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              {(() => { const usage = getLocationUsageStats(location.id, plants, [], []); return (
+                <>
+                  <div className="rounded-2xl bg-slate-50 px-3 py-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Plantas</div><div className="text-xl font-bold text-slate-900">{usage.plants}</div></div>
+                  <div className="rounded-2xl bg-slate-50 px-3 py-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Luz</div><div className="text-sm font-bold text-slate-900">{location.light}</div></div>
+                  <div className="rounded-2xl bg-slate-50 px-3 py-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Sol</div><div className="text-sm font-bold text-slate-900">{location.sunPeriod || 'Parcial'}</div></div>
+                </>
+              ); })()}
+            </div>
+            <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              <b>Melhor uso do ambiente:</b> {location.light === 'Luz Indireta' || location.light === 'Sombra' ? 'folhagens de interior e recuperação' : location.light === 'Meia Sombra' ? 'mudas, germinação e folhagens tropicais' : 'espécies de sol e plantas mais rústicas'}.
+            </div>
 
             {location.plants.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -2804,9 +2992,7 @@ function PlacesView({ locations, plants, onSaveLocation, onDeleteLocation, addTo
   );
 }
 
-function SeedsView({ stock, germinations, locations, onStartGermination, onUpdateGermination, onDeleteGermination, onTransferToGarden, addToHistory }: { stock: StockItem[], germinations: Germination[], locations: Location[], onStartGermination: (g: Germination) => void, onUpdateGermination: (g: Germination) => void, onDeleteGermination: (id: string) => void, onTransferToGarden: (germinationId: string, payload?: Partial<Plant>) => void, addToHistory: (item: any) => void }) {
-  const [view, setView] = useState<'list' | 'identify'>('list');
-
+function SeedsView({ germinations, locations, onStartGermination, onUpdateGermination, onDeleteGermination, onTransferToGarden }: { stock: StockItem[], germinations: Germination[], locations: Location[], onStartGermination: (g: Germination) => void, onUpdateGermination: (g: Germination) => void, onDeleteGermination: (id: string) => void, onTransferToGarden: (germinationId: string, payload?: Partial<Plant>) => void, addToHistory: (item: any) => void }) {
   return (
     <motion.div 
       key="seeds-view"
@@ -2815,43 +3001,20 @@ function SeedsView({ stock, germinations, locations, onStartGermination, onUpdat
       className="space-y-6"
     >
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">Sementes & Germinação</h2>
-        <div className="flex bg-slate-100 p-1 rounded-xl">
-          <button 
-            onClick={() => setView('list')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'list' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            Germinação
-          </button>
-          <button 
-            onClick={() => setView('identify')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'identify' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            Identificar
-          </button>
+        <div>
+          <h2 className="text-2xl font-bold">Sementes & Germinação</h2>
+          <p className="text-slate-500">Toda a gestão de sementes agora é manual e sem reconhecimento por foto. Adicione fotos apenas como registro visual.</p>
         </div>
       </div>
 
-      {view === 'list' ? (
-        <GerminationView 
-          germinations={germinations} 
-          locations={locations}
-          onNewPlanting={() => setView('identify')} 
-          onStartGermination={onStartGermination}
-          onUpdateGermination={onUpdateGermination}
-          onDeleteGermination={onDeleteGermination}
-          onTransferToGarden={onTransferToGarden}
-        />
-      ) : (
-        <SeedIdentifyView 
-          stock={stock} 
-          onStartGermination={(g) => {
-            onStartGermination(g);
-            setView('list');
-          }} 
-          addToHistory={addToHistory} 
-        />
-      )}
+      <GerminationView 
+        germinations={germinations} 
+        locations={locations}
+        onStartGermination={onStartGermination}
+        onUpdateGermination={onUpdateGermination}
+        onDeleteGermination={onDeleteGermination}
+        onTransferToGarden={onTransferToGarden}
+      />
     </motion.div>
   );
 }
@@ -2924,7 +3087,7 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-700">Acompanhamento</h3>
             {onNewPlanting && (
-              <button onClick={onNewPlanting} className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-colors"><Plus className="w-4 h-4" /> Novo por leitura local</button>
+              <button onClick={onNewPlanting} className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-colors"><Plus className="w-4 h-4" /> Novo registro manual</button>
             )}
           </div>
           <p className="text-sm text-slate-500">Gerencie rega, evolução da germinação, local sugerido e transfira automaticamente para o jardim quando a muda estiver pronta.</p>
@@ -2975,6 +3138,13 @@ function GerminationView({ germinations, locations, onNewPlanting, onStartGermin
               <div>
                 <div className="flex justify-between text-xs text-slate-500 mb-1"><span>Progresso</span><span>{progress}%</span></div>
                 <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${progress}%` }} /></div>
+              </div>
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                <b>Fase atual:</b> {getGerminationPhase(g)}
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <div className="font-bold text-slate-900 mb-2">Checklist da fase</div>
+                <div className="space-y-1">{getGerminationChecklist(g).map((item, index) => <div key={index}>• {item}</div>)}</div>
               </div>
 
               {g.image && <img src={g.image} alt={g.name} className="w-full h-40 object-cover rounded-2xl border border-slate-200" />}
@@ -3049,7 +3219,9 @@ function StockView({ stock, setStock, addToHistory, locations }: { stock: StockI
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiPreview, setAiPreview] = useState<any>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [newItem, setNewItem] = useState<Partial<StockItem>>({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '', locationId: locations[0]?.id || '' });
+  const [stockSearch, setStockSearch] = useState('');
+  const [stockFilter, setStockFilter] = useState<'all' | 'favorites' | 'repot' | 'germination'>('all');
+  const [newItem, setNewItem] = useState<Partial<StockItem>>({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '', locationId: locations[0]?.id || '', isFavorite: false });
 
   const categories = [
     'Substratos & Solos',
@@ -3063,7 +3235,7 @@ function StockView({ stock, setStock, addToHistory, locations }: { stock: StockI
 
   const units = ['kg', 'g', 'un', 'L', 'mL', '-'];
 
-  const resetNewItem = () => setNewItem({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '', locationId: locations[0]?.id || '' });
+  const resetNewItem = () => setNewItem({ name: '', quantity: 0, unit: 'kg', minQuantity: 0, category: 'Substratos & Solos', usageTags: [], notes: '', image: '', locationId: locations[0]?.id || '', isFavorite: false });
 
   const openNewItemForm = () => {
     setEditingItemId(null);
@@ -3188,8 +3360,14 @@ Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.qu
 
   const formSuggestion = getStockEnvironmentRecommendation({ ...newItem, locationId: newItem.locationId || '' }, locations);
 
+  const visibleStock = stock.filter((item) => {
+    const matchesSearch = !stockSearch || [item.name, item.category, item.notes || '', ...(item.usageTags || [])].join(' ').toLowerCase().includes(stockSearch.toLowerCase());
+    const matchesFilter = stockFilter === 'all' ? true : stockFilter === 'favorites' ? !!item.isFavorite : stockFilter === 'repot' ? itemHasStockUsageTag(item, 'Substrato') || itemHasStockUsageTag(item, 'Vaso') || itemHasStockUsageTag(item, 'Drenagem') : itemHasStockUsageTag(item, 'Germinação') || itemHasStockUsageTag(item, 'Sementes & Mudas');
+    return matchesSearch && matchesFilter;
+  });
+
   const groupedStock = categories.reduce((acc, cat) => {
-    const items = stock.filter(i => i.category === cat);
+    const items = visibleStock.filter(i => i.category === cat);
     if (items.length > 0) acc[cat] = items;
     return acc;
   }, {} as Record<string, StockItem[]>);
@@ -3204,15 +3382,9 @@ Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.qu
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Estoque de Insumos</h2>
-          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico. Agora você também pode sugerir o melhor ambiente para guardar cada item e editar a ficha completa depois do cadastro.</p>
+          <p className="text-slate-500">Gerencie seus materiais sem alertas de nível crítico. Agora você também pode sugerir o melhor ambiente para guardar cada item, editar a ficha completa depois do cadastro e registrar fotos apenas manualmente.</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <button 
-            onClick={() => { setShowAiForm(prev => !prev); setAiError(null); setEditingItemId(null); if (!showAiForm) resetNewItem(); }}
-            className="bg-blue-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
-          >
-            <PackageSearch className="w-5 h-5" /> Identificar item localmente
-          </button>
           <button 
             onClick={openNewItemForm}
             className="bg-emerald-500 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
@@ -3222,65 +3394,30 @@ Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.qu
         </div>
       </div>
 
-      <AnimatePresence>
-        {showAiForm && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Identificação local de item do estoque</h3>
-                <p className="text-slate-500 text-sm mt-1">Tire uma foto do saco, embalagem, vaso, ferramenta ou insumo. O app faz uma leitura local básica e abre a ficha para você revisar e salvar.</p>
-              </div>
-              {!newItem.image ? (
-                <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-10 text-center space-y-4">
-                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                    <Camera className="w-8 h-8" />
-                  </div>
-                  <div className="text-slate-500 text-sm">Fotografe o item para sugerir nome, categoria, unidade e usos no app.</div>
-                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-500 px-5 py-3 font-bold text-white hover:bg-blue-600 transition-colors">
-                    <Scan className="w-4 h-4" /> Tirar ou escolher foto
-                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelection} />
-                  </label>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-[260px,1fr] gap-5">
-                  <div className="space-y-4">
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                      <img src={newItem.image} alt="Item do estoque" className="h-64 w-full object-cover" />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="flex-1 cursor-pointer rounded-xl bg-slate-100 px-4 py-3 text-center font-semibold text-slate-700 hover:bg-slate-200 transition-colors">
-                        Trocar foto
-                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelection} />
-                      </label>
-                      <button onClick={() => { setNewItem(prev => ({ ...prev, image: '' })); setAiPreview(null); setAiError(null); }} className="rounded-xl bg-slate-100 px-4 py-3 font-semibold text-slate-700 hover:bg-slate-200 transition-colors">Limpar</button>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    {identifying && <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-5 text-blue-700 font-medium flex items-center gap-3"><RefreshCw className="w-5 h-5 animate-spin" /> Analisando o item localmente...</div>}
-                    {aiPreview && (
-                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Sugestão local</div>
-                            <div className="text-xl font-bold text-emerald-950 mt-1">{aiPreview.name}</div>
-                          </div>
-                          <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-bold text-emerald-700 border border-emerald-200">Confiança {aiPreview.confidence}</span>
-                        </div>
-                        <div className="flex flex-wrap gap-2 text-xs font-semibold">
-                          <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-slate-200">Categoria: {aiPreview.category}</span>
-                          <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-slate-200">Unidade: {aiPreview.unit}</span>
-                        </div>
-                        <p className="text-sm text-emerald-900 leading-relaxed">{aiPreview.notes || '-'}</p>
-                      </div>
-                    )}
-                    {aiError && <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4 text-sm font-medium text-amber-700">{aiError}</div>}
-                  </div>
-                </div>
-              )}
+      <div className="grid grid-cols-1 xl:grid-cols-[1.6fr,1fr] gap-4">
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} placeholder="Buscar item, categoria ou uso" className="w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 py-3" />
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <div className="flex flex-wrap gap-2">
+              {[
+                ['all', `Todos (${stock.length})`],
+                ['favorites', 'Favoritos'],
+                ['repot', 'Para replantio'],
+                ['germination', 'Para germinação'],
+              ].map(([key, label]) => <button key={key} onClick={() => setStockFilter(key as any)} className={`rounded-full px-4 py-2 text-sm font-bold ${stockFilter === key ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{label}</button>)}
+            </div>
+          </div>
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm grid grid-cols-2 gap-3 text-sm">
+          <div className="rounded-2xl bg-slate-50 p-3"><div className="text-xs text-slate-400">Favoritos</div><div className="text-2xl font-bold text-slate-900">{stock.filter(item => item.isFavorite).length}</div></div>
+          <div className="rounded-2xl bg-slate-50 p-3"><div className="text-xs text-slate-400">Para replantio</div><div className="text-2xl font-bold text-slate-900">{stock.filter(item => itemHasStockUsageTag(item, 'Substrato') || itemHasStockUsageTag(item, 'Vaso') || itemHasStockUsageTag(item, 'Drenagem')).length}</div></div>
+          <div className="rounded-2xl bg-slate-50 p-3"><div className="text-xs text-slate-400">Para germinação</div><div className="text-2xl font-bold text-slate-900">{stock.filter(item => itemHasStockUsageTag(item, 'Germinação') || itemHasStockUsageTag(item, 'Sementes & Mudas')).length}</div></div>
+          <div className="rounded-2xl bg-slate-50 p-3"><div className="text-xs text-slate-400">Visíveis</div><div className="text-2xl font-bold text-slate-900">{visibleStock.length}</div></div>
+        </div>
+      </div>
 
       <AnimatePresence>
         {showAddForm && (
@@ -3388,6 +3525,7 @@ Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.qu
                       </div>
                     </div>
                     <div className="flex gap-2">
+                      <button onClick={() => setStock(prev => prev.map(entry => entry.id === item.id ? normalizeStockRecord({ ...entry, isFavorite: !entry.isFavorite }) : entry))} className={`transition-colors ${item.isFavorite ? 'text-rose-500' : 'text-slate-300 hover:text-rose-500'}`}><Heart className={`w-4 h-4 ${item.isFavorite ? 'fill-current' : ''}`} /></button>
                       <button onClick={() => openEditItemForm(item)} className="text-slate-300 hover:text-emerald-500 transition-colors"><Edit3 className="w-4 h-4" /></button>
                       <button onClick={() => deleteItem(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
                     </div>
@@ -3418,7 +3556,7 @@ Usos no app: ${item.usageTags?.join(', ') || '-'}. Quantidade inicial: ${item.qu
             </div>
           </div>
         ))}
-        {stock.length === 0 && (
+        {visibleStock.length === 0 && (
           <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
             <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <p className="text-slate-400 font-medium">Seu estoque está vazio.</p>
@@ -3883,17 +4021,8 @@ function DiagnoseView({ addToHistory, setToast }: any) {
   );
 }
 
-function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLightToLocation }: any) {
-  const [mode, setMode] = useState<'ai' | 'manual'>('ai');
-  const [image, setImage] = useState<string | null>(null);
-  const [identifying, setIdentifying] = useState(false);
-  const [plantData, setPlantData] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedLocation, setSelectedLocation] = useState(locations[0]?.id || '');
-  const [confirmed, setConfirmed] = useState(false);
+function IdentifyPlantView({ addPlant, locations, stock, addToHistory }: any) {
   const [stockMessage, setStockMessage] = useState<string | null>(null);
-  const [lightMeasurement, setLightMeasurement] = useState<LightAnalysisResult | null>(null);
-  const [applyingLight, setApplyingLight] = useState(false);
   const [manualPlant, setManualPlant] = useState<Partial<Plant>>({
     name: '',
     species: UNKNOWN_OPTION,
@@ -3910,34 +4039,18 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLi
     image: ''
   });
 
-  const matchSelectOption = (value: string | undefined, options: string[]) => {
-    const normalized = normalizeChoice(value);
-    return options.includes(normalized) ? normalized : UNKNOWN_OPTION;
-  };
-
-  const patchPlantData = (partial: any) => {
-    setPlantData((prev: any) => ({ ...(prev || {}), ...partial }));
-  };
-
-  const aiStockBundle = useMemo(() => buildStockRecommendationBundle(stock, plantData || {}), [stock, plantData]);
-  const aiStockSuggestion = useMemo(() => {
-    if (!plantData) return '';
-    return [plantData.stockSuggestions && plantData.stockSuggestions !== UNKNOWN_OPTION ? plantData.stockSuggestions : '', aiStockBundle.summary].filter(Boolean).join(' ');
-  }, [plantData, aiStockBundle]);
+  useEffect(() => {
+    const profile = findPlantProfileByName(manualPlant.name);
+    if (!profile) return;
+    setManualPlant(prev => {
+      const patch = buildPlantAutofillPatch(profile, prev);
+      if (!Object.keys(patch).length) return prev;
+      return { ...prev, ...patch };
+    });
+  }, [manualPlant.name]);
 
   const manualStockBundle = useMemo(() => buildStockRecommendationBundle(stock, manualPlant), [stock, manualPlant]);
   const manualStockSuggestion = manualStockBundle.summary;
-
-  const applyAiStockSuggestion = () => {
-    if (!plantData) return;
-    const patch = aiStockBundle.patch;
-    if (!Object.keys(patch).length) {
-      setStockMessage('A ficha já está alinhada com o estoque ou não há itens suficientes para sugerir algo novo.');
-      return;
-    }
-    patchPlantData(patch);
-    setStockMessage('Sugestões do estoque aplicadas ao cadastro por IA.');
-  };
 
   const applyManualStockSuggestion = () => {
     const patch = manualStockBundle.patch;
@@ -3949,37 +4062,6 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLi
     setStockMessage('Sugestões do estoque aplicadas aos campos técnicos em aberto.');
   };
 
-  const resetAiState = () => {
-    setImage(null);
-    setPlantData(null);
-    setConfirmed(false);
-    setError(null);
-    setStockMessage(null);
-    setLightMeasurement(null);
-  };
-
-  useEffect(() => {
-    setStockMessage(null);
-  }, [mode]);
-
-  useEffect(() => {
-    const profile = findPlantProfileByName(manualPlant.name);
-    if (!profile) return;
-    setManualPlant(prev => {
-      const patch = buildPlantAutofillPatch(profile, prev);
-      if (!Object.keys(patch).length) return prev;
-      return { ...prev, ...patch };
-    });
-  }, [manualPlant.name]);
-
-  const handleCapture = async (e: any) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const result = await readFileAsOptimizedDataUrl(file);
-    setImage(result);
-    identifyPlant(result);
-  };
-
   const handleManualImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3987,74 +4069,11 @@ function IdentifyPlantView({ addPlant, locations, stock, addToHistory, onApplyLi
     setManualPlant(prev => ({ ...prev, image: result }));
   };
 
-  const identifyPlant = async (base64Image: string) => {
-    setIdentifying(true);
-    setError(null);
-    setConfirmed(false);
-    try {
-      const lightAnalysis = await analyzeLightWithAI(base64Image);
-      setLightMeasurement(lightAnalysis);
-      setPlantData(identifyPlantLocally(lightAnalysis, stock));
-      setError('A leitura local por foto montou uma ficha inicial. Revise manualmente antes de salvar.');
-    } finally {
-      setIdentifying(false);
-    }
-  };
-
-  const handleApplyDetectedLight = async () => {
-    if (!lightMeasurement) {
-      setStockMessage('Ainda não há leitura de luminosidade para aplicar.');
-      return;
-    }
-    if (!selectedLocation) {
-      setStockMessage('Escolha um ambiente antes de aplicar a medição de luz.');
-      return;
-    }
-    setApplyingLight(true);
-    try {
-      await onApplyLightToLocation?.(selectedLocation, lightMeasurement);
-      setStockMessage(`Leitura de luminosidade aplicada ao ambiente ${locations.find((l: any) => l.id === selectedLocation)?.name || ''}.`);
-    } finally {
-      setApplyingLight(false);
-    }
-  };
-
-  const handleSave = () => {
-    if (!plantData) return;
-
-    const newPlant: Plant = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: normalizeChoice(plantData.name),
-      species: normalizeChoice(plantData.species),
-      locationId: selectedLocation,
-      status: (plantData.status || 'Saudável') as Plant['status'],
-      wateringFrequency: plantData.wateringFrequency || 'Semanal',
-      notes: [normalizeChoice(plantData.notes), aiStockSuggestion].filter(Boolean).join('\n\n'),
-      image: image || undefined,
-      lastWatered: new Date().toISOString(),
-      lastRepotted: '',
-      potSize: normalizeChoice(plantData.potSize),
-      substrateMix: normalizeChoice(plantData.substrateMix),
-      drainageLayer: normalizeChoice(plantData.drainageLayer),
-      substrate: normalizeChoice(plantData.substrate),
-      drainage: normalizeChoice(plantData.drainage),
-      filterMaterial: normalizeChoice(plantData.filterMaterial),
-      isFavorite: false,
-      createdAt: new Date().toISOString(),
-      photoHistory: image ? [createPhotoEntry(image, 'Registro inicial por identificação', 'Identificação')] : []
-    };
-
-    addPlant(normalizePlantRecord(newPlant));
-    addToHistory({
-      type: 'Identificação',
-      title: newPlant.name,
-      details: `Espécie: ${newPlant.species}
-Local: ${locations.find((l: any) => l.id === selectedLocation)?.name}
-Substrato: ${newPlant.substrateMix !== UNKNOWN_OPTION ? newPlant.substrateMix : newPlant.substrate}
-Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer : newPlant.drainage}`,
-      image: image || undefined
+  const resetManualPlant = () => {
+    setManualPlant({
+      name: '', species: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION, image: ''
     });
-    setConfirmed(true);
+    setStockMessage(null);
   };
 
   const handleManualSave = () => {
@@ -4092,6 +4111,7 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
       details: `Planta adicionada manualmente em ${locations.find((l: any) => l.id === newPlant.locationId)?.name || 'Local não definido'}`,
       image: newPlant.image,
     });
+    resetManualPlant();
   };
 
   return (
@@ -4102,295 +4122,110 @@ Drenagem: ${newPlant.drainageLayer !== UNKNOWN_OPTION ? newPlant.drainageLayer :
       className="max-w-3xl mx-auto space-y-8"
     >
       <div className="text-center">
-        <h2 className="text-3xl font-bold text-slate-900 mb-2">Adicionar Planta</h2>
-        <p className="text-slate-500">Use leitura local por foto ou preencha manualmente o cadastro completo da planta.</p>
+        <h2 className="text-3xl font-bold text-slate-900 mb-2">Nova Planta</h2>
+        <p className="text-slate-500">Cadastro totalmente manual. Fotos servem apenas como registro visual e o app sugere preenchimentos com base no nome da planta e no estoque.</p>
       </div>
 
-      <div className="flex bg-slate-100 p-1 rounded-2xl w-full sm:w-fit mx-auto">
-        <button
-          onClick={() => setMode('ai')}
-          className={`px-5 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'ai' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-        >
-          Leitura local por foto
-        </button>
-        <button
-          onClick={() => setMode('manual')}
-          className={`px-5 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-        >
-          Cadastro manual
-        </button>
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Use <b>-</b> quando não souber ou não quiser preencher um campo. O app vai sugerir a melhor combinação possível com base no estoque.
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Nome da planta</label><div className="text-xs text-slate-500">Ao digitar um nome conhecido, o app tenta preencher nome científico e cuidados básicos automaticamente.</div>
+            <input type="text" value={manualPlant.name || ''} onChange={(e) => setManualPlant({ ...manualPlant, name: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Babosa" />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Nome científico</label>
+            <input type="text" value={manualPlant.species || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, species: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Aloe vera ou -" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Ambiente</label>
+            <select value={manualPlant.locationId || locations[0]?.id || ''} onChange={(e) => setManualPlant({ ...manualPlant, locationId: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {locations.map((location: any) => <option key={location.id} value={location.id}>{location.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Status</label>
+            <select value={manualPlant.status || 'Saudável'} onChange={(e) => setManualPlant({ ...manualPlant, status: e.target.value as Plant['status'] })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Frequência de rega</label>
+            <select value={manualPlant.wateringFrequency || 'Semanal'} onChange={(e) => setManualPlant({ ...manualPlant, wateringFrequency: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Tamanho do vaso</label>
+            <select value={normalizeChoice(manualPlant.potSize)} onChange={(e) => setManualPlant({ ...manualPlant, potSize: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Material de filtragem</label>
+            <select value={normalizeChoice(manualPlant.filterMaterial)} onChange={(e) => setManualPlant({ ...manualPlant, filterMaterial: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Substrato principal</label>
+            <select value={normalizeChoice(manualPlant.substrate)} onChange={(e) => setManualPlant({ ...manualPlant, substrate: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+            <input type="text" value={manualPlant.substrateMix || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, substrateMix: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes ou mistura personalizada / -" />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-slate-700">Drenagem</label>
+            <select value={normalizeChoice(manualPlant.drainage)} onChange={(e) => setManualPlant({ ...manualPlant, drainage: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+            <input type="text" value={manualPlant.drainageLayer || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, drainageLayer: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada / -" />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-semibold text-slate-700">Observações</label>
+          <textarea value={manualPlant.notes || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })} className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none" placeholder="Cuidados, histórico, origem da muda ou -" />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-semibold text-slate-700">Foto manual da planta</label>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
+            <Camera className="w-4 h-4" /> Adicionar foto
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualImage} />
+          </label>
+          {manualPlant.image && <img src={manualPlant.image} alt="Planta manual" className="w-full h-48 object-cover rounded-2xl border border-slate-200" />}
+        </div>
+
+        <StockSuggestionPanel
+          summary={manualStockSuggestion}
+          items={manualStockBundle.items}
+          onApply={applyManualStockSuggestion}
+          disabled={!Object.keys(manualStockBundle.patch).length}
+          message={stockMessage}
+        />
+
+        <div className="flex flex-col sm:flex-row gap-3 pt-2">
+          <button onClick={handleManualSave} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20">
+            Salvar planta manualmente
+          </button>
+          <button onClick={resetManualPlant} className="sm:w-48 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors">
+            Limpar
+          </button>
+        </div>
       </div>
-
-      {mode === 'ai' ? (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
-          {!image ? (
-            <div className="aspect-video bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center gap-4 text-slate-400">
-              <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center">
-                <Scan className="w-8 h-8" />
-              </div>
-              <label className="cursor-pointer bg-emerald-500 text-white px-8 py-4 rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 flex items-center gap-2">
-                <Camera className="w-5 h-5" /> Identificar Planta
-                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleCapture} />
-              </label>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="aspect-video rounded-2xl overflow-hidden relative border border-slate-200 shadow-inner">
-                <img src={image} alt="Planta capturada" className="w-full h-full object-cover" />
-                {identifying && (
-                  <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex flex-col items-center justify-center text-white gap-3">
-                    <RefreshCw className="w-8 h-8 animate-spin" />
-                    <span className="font-bold">Identificando espécie e completando ficha...</span>
-                  </div>
-                )}
-              </div>
-
-              {plantData && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                    A leitura local tentou preencher uma ficha inicial. Quando não souber algo, deixe <b>-</b> ou ajuste manualmente antes de salvar.
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Nome Identificado</label>
-                      <input type="text" value={plantData.name} onChange={(e) => patchPlantData({ name: e.target.value })} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none" />
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Espécie</label>
-                      <input type="text" value={plantData.species} onChange={(e) => patchPlantData({ species: e.target.value })} className="w-full bg-transparent font-medium text-slate-600 italic focus:outline-none" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Onde ela vai ficar?</label>
-                      <select value={selectedLocation} onChange={(e) => setSelectedLocation(e.target.value)} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none">
-                        {locations.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Status</label>
-                      <select value={plantData.status} onChange={(e) => patchPlantData({ status: e.target.value })} className="w-full bg-transparent font-bold text-slate-900 focus:outline-none appearance-none">
-                        {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                      <label className="text-xs font-bold text-emerald-600 uppercase mb-1 block">Frequência de Rega</label>
-                      <select value={plantData.wateringFrequency} onChange={(e) => patchPlantData({ wateringFrequency: e.target.value })} className="w-full bg-transparent font-bold text-emerald-900 focus:outline-none appearance-none">
-                        {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Tamanho do vaso</label>
-                      <select value={normalizeChoice(plantData.potSize)} onChange={(e) => patchPlantData({ potSize: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Material de filtragem</label>
-                      <select value={normalizeChoice(plantData.filterMaterial)} onChange={(e) => patchPlantData({ filterMaterial: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Substrato principal</label>
-                      <select value={normalizeChoice(plantData.substrate)} onChange={(e) => patchPlantData({ substrate: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                      <input type="text" value={normalizeChoice(plantData.substrateMix)} onChange={(e) => patchPlantData({ substrateMix: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da mistura ou -" />
-                    </div>
-                    <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-400 uppercase">Drenagem</label>
-                      <select value={normalizeChoice(plantData.drainage)} onChange={(e) => patchPlantData({ drainage: e.target.value })} className="w-full bg-transparent font-semibold text-slate-900 focus:outline-none appearance-none">
-                        {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                      <input type="text" value={normalizeChoice(plantData.drainageLayer)} onChange={(e) => patchPlantData({ drainageLayer: e.target.value })} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada ou -" />
-                    </div>
-                  </div>
-
-                  <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                    <label className="text-xs font-bold text-blue-600 uppercase mb-1 block">Dica de Cuidado</label>
-                    <textarea value={plantData.notes} onChange={(e) => patchPlantData({ notes: e.target.value })} className="w-full bg-transparent text-blue-900 focus:outline-none resize-none h-20" />
-                  </div>
-
-                  <StockSuggestionPanel
-                    summary={aiStockSuggestion}
-                    items={aiStockBundle.items}
-                    onApply={applyAiStockSuggestion}
-                    disabled={!Object.keys(aiStockBundle.patch).length}
-                    message={stockMessage}
-                  />
-
-                  <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 space-y-4">
-                    <div className="flex items-start gap-3 text-sm text-amber-900">
-                      <ThermometerSun className="w-5 h-5 shrink-0 text-amber-500" />
-                      <div>
-                        <div className="font-bold">Leitura automática de luminosidade do scan</div>
-                        <p>{lightMeasurement ? `Estimativa atual: ${lightMeasurement.level} • ${lightMeasurement.sunPeriod}. ${lightMeasurement.explanation}` : 'Ao escanear a planta, o app também tenta medir a luminosidade do local pela mesma foto.'}</p>
-                      </div>
-                    </div>
-                    <div className="rounded-2xl bg-white p-4 border border-amber-100 text-sm text-slate-700">
-                      <b>Para melhor precisão:</b> {lightMeasurement?.middayTip || MIDDAY_LIGHT_GUIDE}
-                    </div>
-                    {lightMeasurement && (
-                      <div className="grid gap-3 md:grid-cols-[1fr,auto] md:items-center">
-                        <div className="rounded-2xl bg-white p-4 border border-emerald-100 text-sm text-slate-700 space-y-2">
-                          <p><b>Luz estimada:</b> {lightMeasurement.level}</p>
-                          <p><b>Período de sol:</b> {lightMeasurement.sunPeriod}</p>
-                          <p><b>Dica:</b> {lightMeasurement.tip}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleApplyDetectedLight}
-                          disabled={applyingLight || !selectedLocation}
-                          className="px-4 py-3 rounded-2xl bg-emerald-500 text-white font-bold hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          {applyingLight ? 'Aplicando...' : 'Aplicar ao ambiente'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex gap-3 pt-4">
-                    {!confirmed ? (
-                      <button onClick={handleSave} className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2">
-                        <CheckCircle2 className="w-5 h-5" /> Confirmar e Salvar
-                      </button>
-                    ) : (
-                      <div className="flex-[2] py-4 bg-emerald-100 text-emerald-700 rounded-2xl font-bold flex items-center justify-center gap-2">
-                        <CheckCircle2 className="w-5 h-5" /> Salvo no Jardim
-                      </div>
-                    )}
-                    <button onClick={resetAiState} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors">
-                      Novo Scan
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-
-              {error && (
-                <div className="p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm font-medium">
-                  {error}
-                  <button onClick={resetAiState} className="block mt-2 underline">Tentar novamente</button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Use <b>-</b> quando não souber ou não quiser preencher um campo. O app vai sugerir a melhor combinação possível com base no estoque.
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Nome da planta</label><div className="text-xs text-slate-500">Ao digitar um nome conhecido, o app tenta preencher nome científico e cuidados básicos automaticamente.</div>
-              <input type="text" value={manualPlant.name || ''} onChange={(e) => setManualPlant({ ...manualPlant, name: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Babosa" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Nome científico</label>
-              <input type="text" value={manualPlant.species || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, species: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Aloe vera ou -" />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Ambiente</label>
-              <select value={manualPlant.locationId || locations[0]?.id || ''} onChange={(e) => setManualPlant({ ...manualPlant, locationId: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {locations.map((location: any) => <option key={location.id} value={location.id}>{location.name}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Status</label>
-              <select value={manualPlant.status || 'Saudável'} onChange={(e) => setManualPlant({ ...manualPlant, status: e.target.value as Plant['status'] })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {PLANT_STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Frequência de rega</label>
-              <select value={manualPlant.wateringFrequency || 'Semanal'} onChange={(e) => setManualPlant({ ...manualPlant, wateringFrequency: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {WATERING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Tamanho do vaso</label>
-              <select value={normalizeChoice(manualPlant.potSize)} onChange={(e) => setManualPlant({ ...manualPlant, potSize: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {POT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Material de filtragem</label>
-              <select value={normalizeChoice(manualPlant.filterMaterial)} onChange={(e) => setManualPlant({ ...manualPlant, filterMaterial: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Substrato principal</label>
-              <select value={normalizeChoice(manualPlant.substrate)} onChange={(e) => setManualPlant({ ...manualPlant, substrate: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {SUBSTRATE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-              <input type="text" value={manualPlant.substrateMix || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, substrateMix: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes ou mistura personalizada / -" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">Drenagem</label>
-              <select value={normalizeChoice(manualPlant.drainage)} onChange={(e) => setManualPlant({ ...manualPlant, drainage: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                {DRAINAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-              <input type="text" value={manualPlant.drainageLayer || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, drainageLayer: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl" placeholder="Detalhes da camada / -" />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700">Observações</label>
-            <textarea value={manualPlant.notes || UNKNOWN_OPTION} onChange={(e) => setManualPlant({ ...manualPlant, notes: e.target.value })} className="w-full h-28 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none" placeholder="Cuidados, histórico, origem da muda ou -" />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700">Foto manual da planta</label>
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 transition-colors">
-              <Camera className="w-4 h-4" /> Adicionar foto
-              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleManualImage} />
-            </label>
-            {manualPlant.image && <img src={manualPlant.image} alt="Planta manual" className="w-full h-48 object-cover rounded-2xl border border-slate-200" />}
-          </div>
-
-          <StockSuggestionPanel
-            summary={manualStockSuggestion}
-            items={manualStockBundle.items}
-            onApply={applyManualStockSuggestion}
-            disabled={!Object.keys(manualStockBundle.patch).length}
-            message={stockMessage}
-          />
-
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
-            <button onClick={handleManualSave} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20">
-              Salvar planta manualmente
-            </button>
-            <button
-              onClick={() => { setManualPlant({
-                name: '', species: UNKNOWN_OPTION, locationId: locations[0]?.id || '', status: 'Saudável', wateringFrequency: 'Semanal', notes: UNKNOWN_OPTION, potSize: UNKNOWN_OPTION, substrate: UNKNOWN_OPTION, drainage: UNKNOWN_OPTION, filterMaterial: UNKNOWN_OPTION, substrateMix: UNKNOWN_OPTION, drainageLayer: UNKNOWN_OPTION, image: ''
-              }); setStockMessage(null); }}
-              className="sm:w-48 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
-            >
-              Limpar
-            </button>
-          </div>
-        </div>
-      )}
     </motion.div>
   );
 }
@@ -4480,7 +4315,7 @@ function SettingsView({ settings, saveSettings, setSettings, data }: any) {
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-8">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 mb-2">IA neste dispositivo</h2>
-          <p className="text-slate-500">A chave do Gemini agora é opcional e usada só para textos curtos do jardim. Reconhecimento por imagem, diagnóstico visual e medição de luz rodam localmente em modo básico.</p>
+          <p className="text-slate-500">A chave do Gemini agora é opcional e usada só para textos curtos do jardim. O app não usa mais reconhecimento nem diagnóstico por foto.</p>
         </div>
 
         <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
@@ -4637,7 +4472,7 @@ function SettingsView({ settings, saveSettings, setSettings, data }: any) {
         <div className="pt-8 border-t border-slate-100">
           <h3 className="font-bold text-slate-900 mb-4">Sobre o Atena Garden</h3>
           <div className="p-4 bg-slate-50 rounded-2xl text-sm text-slate-600 leading-relaxed">
-            Versão 2.0.0 (Local First)<br />
+            Versão 2.1.0 (Daily Planning)<br />
             Seus dados ficam armazenados localmente neste navegador. Faça exportações regulares do backup JSON para não perder seu jardim.
           </div>
         </div>
@@ -4921,7 +4756,7 @@ function InsightPanel({ icon: Icon, title, text }: { icon: any, title: string, t
   );
 }
 
-function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot, onDelete }: { plant: Plant, location?: string, locations?: Location[], onWater?: (id: string) => void, onUpdate?: (p: Plant) => void, onRepot?: (id: string, details: any) => void, onDelete?: (id: string) => void, key?: any }) {
+function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot, onDelete, onDuplicate, onExport }: { plant: Plant, location?: string, locations?: Location[], onWater?: (id: string) => void, onUpdate?: (p: Plant) => void, onRepot?: (id: string, details: any) => void, onDelete?: (id: string) => void, onDuplicate?: (id: string) => void, onExport?: (id: string) => void, key?: any }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(plant);
 
@@ -4933,6 +4768,9 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
   const currentLocationMatch = environmentRecommendation.current;
   const bestLocationMatch = environmentRecommendation.best;
   const symptomDiagnosis = useMemo(() => diagnoseSymptomsLocally(editData.symptomNotes || '', editData), [editData]);
+  const timelineEntries = useMemo(() => getPlantTimelineEntries(plant).slice(0, 5), [plant]);
+  const phaseLabel = getPlantPhase(plant);
+  const observationLevel = getPlantObservationLevel(plant);
 
   const handleSave = () => {
     const diagnosisPayload = (editData.symptomNotes || '').trim()
@@ -5023,6 +4861,9 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
               <div className="flex items-center gap-2 text-sm text-slate-600">
                 <History className="w-4 h-4 text-violet-500" /> Vida no jardim: {getPlantLifeLabel(plant.createdAt)}
               </div>
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <ClipboardList className="w-4 h-4 text-amber-500" /> Fase: {phaseLabel} • Observação {observationLevel}
+              </div>
               <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900 space-y-1">
                 <div><b>Compatibilidade do local atual:</b> {currentLocationMatch ? `${currentLocationMatch.label} (${currentLocationMatch.score}%)` : 'Sem ambiente definido'}</div>
                 <div><b>Melhor ambiente sugerido:</b> {bestLocationMatch?.name || '-'} • {bestLocationMatch?.label || '-'} ({bestLocationMatch?.score || 0}%)</div>
@@ -5066,7 +4907,7 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
 
             <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
               <div className="flex items-center justify-between">
-                <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Histórico de fotos</div>
+                <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Linha do tempo visual</div>
                 <div className="text-xs text-slate-500">{plant.photoHistory?.length || (plant.image ? 1 : 0)} registro(s)</div>
               </div>
               <div className="flex gap-3 overflow-x-auto pb-1">
@@ -5074,6 +4915,15 @@ function PlantCard({ plant, location, locations = [], onWater, onUpdate, onRepot
                   <div key={entry.id} className="min-w-[96px] max-w-[96px]">
                     <img src={entry.image} alt={entry.note || plant.name} className="h-24 w-24 object-cover rounded-2xl border border-slate-200" />
                     <div className="mt-1 text-[10px] text-slate-500 leading-tight">{new Date(entry.date).toLocaleDateString()}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                {timelineEntries.map((entry: any) => (
+                  <div key={entry.id} className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    <div className="font-bold text-slate-800">{entry.title}</div>
+                    <div>{entry.detail}</div>
+                    <div className="mt-1 text-[10px] text-slate-400">{new Date(entry.date).toLocaleDateString('pt-BR')}</div>
                   </div>
                 ))}
               </div>
